@@ -1,0 +1,1608 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JAKD63 Matchday — Squad Rotation</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<!-- Firebase (compat build, single-file friendly). App works fine without a config too — see CONFIG section in the script. -->
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
+
+<style>
+  :root{
+    --bg:#F1F4EE;
+    --bg-alt:#E5EADF;
+    --card:#FFFFFF;
+    --line:#D3DCC9;
+    --ink:#182016;
+    --ink-soft:#516052;
+    --pitch:#1B4332;
+    --pitch-light:#2D6A4F;
+    --amber:#C97C1F;
+    --amber-soft:#F3E1C4;
+    --red:#B3432A;
+    --shadow: 0 1px 2px rgba(20,30,20,.06), 0 6px 20px rgba(20,30,20,.06);
+    color-scheme: light;
+  }
+  [data-theme="dark"]{
+    --bg:#0E1710;
+    --bg-alt:#132018;
+    --card:#152219;
+    --line:#25392A;
+    --ink:#E9EFE6;
+    --ink-soft:#9DB09D;
+    --pitch:#63C08A;
+    --pitch-light:#3E8F63;
+    --amber:#E3A552;
+    --amber-soft:#3A2E18;
+    --red:#E38668;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.35);
+    color-scheme: dark;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--bg);
+    color:var(--ink);
+    font-family:'Inter',system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased;
+    min-height:100vh;
+    padding-bottom:60px;
+  }
+  h1,h2,h3,.jersey{
+    font-family:'Oswald',sans-serif;
+    letter-spacing:.01em;
+  }
+  a{color:inherit;}
+
+  /* ---------- Header ---------- */
+  header.top{
+    background:var(--pitch);
+    color:#F1F4EE;
+    padding:18px 20px 22px;
+    border-bottom-left-radius:18px;
+    border-bottom-right-radius:18px;
+    position:relative;
+    overflow:hidden;
+  }
+  header.top::after{
+    content:"";
+    position:absolute; right:-40px; top:-60px;
+    width:220px; height:220px; border-radius:50%;
+    background:radial-gradient(circle, rgba(255,255,255,.09), transparent 70%);
+  }
+  .top-row{display:flex; align-items:center; justify-content:space-between; gap:12px;}
+  .brand{display:flex; flex-direction:column; gap:2px;}
+  .brand .kicker{font-size:11px; text-transform:uppercase; letter-spacing:.14em; opacity:.75;}
+  .brand h1{font-size:26px; margin:0; font-weight:600;}
+  .theme-toggle{
+    display:flex; align-items:center; gap:8px;
+    background:rgba(255,255,255,.12);
+    border:1px solid rgba(255,255,255,.25);
+    border-radius:999px;
+    padding:6px 6px;
+    cursor:pointer;
+    user-select:none;
+  }
+  .theme-toggle span{font-size:15px; width:22px; text-align:center;}
+  .theme-toggle .knob{
+    width:34px; height:20px; border-radius:999px; background:rgba(0,0,0,.25);
+    position:relative; transition:background .2s;
+  }
+  .theme-toggle .knob::before{
+    content:""; position:absolute; top:2px; left:2px; width:16px; height:16px;
+    border-radius:50%; background:#fff; transition:transform .2s;
+  }
+  [data-theme="dark"] .theme-toggle .knob::before{ transform:translateX(14px); }
+
+  .sync-pill{
+    margin-top:12px; display:inline-flex; align-items:center; gap:6px;
+    font-size:12px; padding:4px 10px; border-radius:999px;
+    background:rgba(255,255,255,.13); border:1px solid rgba(255,255,255,.2);
+  }
+  .sync-dot{width:7px; height:7px; border-radius:50%; background:#63C08A;}
+  .sync-dot.local{background:var(--amber);}
+
+  /* ---------- Match strip ---------- */
+  .match-strip{
+    display:flex; gap:8px; overflow-x:auto; padding:14px 16px 4px;
+    scrollbar-width:thin;
+  }
+  .match-chip{
+    flex:0 0 auto;
+    background:var(--card);
+    border:1px solid var(--line);
+    color:var(--ink);
+    border-radius:12px;
+    padding:8px 12px;
+    font-size:12px;
+    cursor:pointer;
+    text-align:left;
+    min-width:108px;
+    box-shadow:var(--shadow);
+  }
+  .match-chip b{display:block; font-family:'Oswald',sans-serif; font-size:14px; font-weight:500;}
+  .match-chip.active{
+    background:var(--pitch); color:#fff; border-color:var(--pitch);
+  }
+  .match-chip .warn-dot{display:inline-block; width:6px; height:6px; border-radius:50%; background:var(--red); margin-left:5px;}
+
+  /* ---------- Main layout ---------- */
+  main{max-width:1080px; margin:0 auto; padding:8px 16px 40px;}
+  .grid{display:grid; grid-template-columns:1.4fr 1fr; gap:18px; align-items:start;}
+  @media (max-width:860px){ .grid{grid-template-columns:1fr;} }
+
+  .card{
+    background:var(--card);
+    border:1px solid var(--line);
+    border-radius:16px;
+    padding:18px 18px 16px;
+    box-shadow:var(--shadow);
+    margin-bottom:18px;
+  }
+  .fixture-head{display:flex; justify-content:space-between; align-items:flex-start; gap:10px; flex-wrap:wrap;}
+  .fixture-head h2{margin:0 0 4px; font-size:22px;}
+  .fixture-meta{font-size:13px; color:var(--ink-soft); line-height:1.6;}
+  .fixture-badge{
+    background:var(--amber-soft); color:var(--amber);
+    font-family:'Oswald',sans-serif; font-size:12px; letter-spacing:.06em;
+    padding:5px 10px; border-radius:8px; text-transform:uppercase;
+  }
+
+  .section-title{
+    font-size:13px; text-transform:uppercase; letter-spacing:.08em;
+    color:var(--ink-soft); margin:18px 0 8px; display:flex; align-items:center; gap:8px;
+  }
+  .section-title .count{
+    background:var(--bg-alt); color:var(--ink); border-radius:999px;
+    padding:1px 8px; font-size:11px; font-family:'Inter';
+  }
+
+  .player-row{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:9px 10px; border-radius:10px;
+    border:1px solid var(--line);
+    margin-bottom:6px;
+    background:var(--bg-alt);
+  }
+  .player-row .name{display:flex; align-items:center; gap:8px; font-weight:600; font-size:14.5px;}
+  .player-row .tag{font-size:10.5px; color:var(--ink-soft); font-weight:500; background:var(--card); border:1px solid var(--line); padding:2px 6px; border-radius:6px;}
+  .avail-btn{
+    border:1px solid var(--line); background:var(--card); color:var(--ink-soft);
+    font-size:11.5px; padding:5px 10px; border-radius:999px; cursor:pointer;
+    font-family:'Inter'; font-weight:600;
+  }
+  .avail-btn.out{ background:var(--red); border-color:var(--red); color:#fff; }
+  .avail-btn:disabled{opacity:.45; cursor:default;}
+  .player-row.unavailable{opacity:.55;}
+
+  .sub-timeline{list-style:none; margin:0; padding:0;}
+  .sub-timeline li{
+    display:flex; gap:12px; align-items:baseline; padding:8px 0; border-bottom:1px dashed var(--line);
+    font-size:13.5px;
+  }
+  .sub-timeline li:last-child{border-bottom:none;}
+  .sub-timeline .time{
+    font-family:'Oswald'; font-weight:600; color:var(--pitch-light); min-width:44px;
+  }
+  .sub-timeline .arrow-on{color:#2f8f5c; font-weight:600;}
+  .sub-timeline .arrow-off{color:var(--red); font-weight:600;}
+  [data-theme="dark"] .sub-timeline .arrow-on{color:#63C08A;}
+
+  .warning-box{
+    background:var(--amber-soft); border:1px solid var(--amber); color:var(--amber);
+    border-radius:10px; padding:10px 12px; font-size:13px; margin-bottom:14px;
+  }
+  .note-box{
+    background:var(--bg-alt); border:1px solid var(--line); color:var(--ink-soft);
+    border-radius:10px; padding:10px 12px; font-size:12.5px; margin-top:6px; line-height:1.5;
+  }
+
+  table.season{width:100%; border-collapse:collapse; font-size:13px;}
+  table.season th, table.season td{ text-align:left; padding:7px 6px; border-bottom:1px solid var(--line); }
+  table.season th{ color:var(--ink-soft); font-weight:600; font-size:11.5px; text-transform:uppercase; letter-spacing:.04em;}
+  table.season td.num{ text-align:right; font-variant-numeric:tabular-nums; }
+  .bar-wrap{background:var(--bg-alt); border-radius:6px; height:6px; width:80px; overflow:hidden; display:inline-block; vertical-align:middle; margin-right:6px;}
+  .bar-fill{background:var(--pitch-light); height:100%;}
+
+  .lock-note{font-size:11.5px; color:var(--ink-soft); font-style:italic; margin-bottom:8px;}
+
+  footer.app-footer{max-width:1080px; margin:0 auto; padding:8px 16px 30px; font-size:12px; color:var(--ink-soft); line-height:1.6;}
+
+  /* ---------- Kickoff control (on fixture card) ---------- */
+  .kickoff-btn{
+    display:inline-flex; align-items:center; gap:8px;
+    background:var(--pitch); color:#fff; border:none;
+    font-family:'Oswald'; font-size:15px; letter-spacing:.02em;
+    padding:10px 18px; border-radius:10px; cursor:pointer; margin-top:10px;
+  }
+  .kickoff-btn:active{ transform:scale(.98); }
+  .live-status-line{
+    display:flex; align-items:center; gap:8px; margin-top:10px; font-size:13px; color:var(--ink-soft);
+  }
+  .small-link-btn{
+    background:none; border:none; color:var(--red); font-size:11.5px; text-decoration:underline; cursor:pointer; padding:0;
+  }
+
+  /* ---------- Live match bar ---------- */
+  .live-bar{
+    position:sticky; top:0; z-index:40;
+    background:var(--pitch); color:#fff;
+    padding:10px 16px; box-shadow:0 4px 16px rgba(0,0,0,.2);
+  }
+  .live-bar.hidden{display:none;}
+  .live-bar-inner{
+    max-width:1080px; margin:0 auto; display:flex; align-items:center; justify-content:space-between;
+    gap:12px; flex-wrap:wrap;
+  }
+  .live-info{display:flex; align-items:center; gap:10px;}
+  .live-dot{
+    width:10px; height:10px; border-radius:50%; background:#ff5a5a;
+    box-shadow:0 0 0 rgba(255,90,90,.6); animation:pulse 1.6s infinite;
+    flex:0 0 auto;
+  }
+  .live-bar.paused .live-dot{ background:var(--amber); animation:none; }
+  @keyframes pulse{
+    0%{box-shadow:0 0 0 0 rgba(255,90,90,.55);}
+    70%{box-shadow:0 0 0 8px rgba(255,90,90,0);}
+    100%{box-shadow:0 0 0 0 rgba(255,90,90,0);}
+  }
+  .live-title{font-family:'Oswald'; font-size:14px; letter-spacing:.03em;}
+  .live-clock{font-size:12px; opacity:.85; font-variant-numeric:tabular-nums;}
+  .live-clock b{font-size:15px; font-variant-numeric:tabular-nums;}
+  .live-score-block{
+    font-family:'Oswald'; font-size:26px; font-weight:600; letter-spacing:.02em;
+    display:flex; flex-direction:column; align-items:center; line-height:1;
+    padding:0 6px;
+  }
+  .live-score-sep{opacity:.6; margin:0 6px; font-weight:400;}
+  .live-score-label{
+    font-family:'Inter'; font-size:10px; text-transform:uppercase; letter-spacing:.06em;
+    opacity:.75; margin-top:3px; font-weight:600;
+  }
+  .live-controls{display:flex; gap:8px; align-items:center;}
+  .live-controls button{
+    font-family:'Inter'; font-weight:600; font-size:12.5px;
+    border-radius:8px; padding:8px 12px; cursor:pointer; border:1px solid rgba(255,255,255,.35);
+    background:rgba(255,255,255,.12); color:#fff;
+  }
+  .live-controls button.primary{ background:#fff; color:var(--pitch); border-color:#fff; }
+  .live-controls button.ghost{ background:transparent; border-color:rgba(255,255,255,.25); opacity:.8; }
+  .hidden{display:none !important;}
+
+  /* ---------- Substitution alert overlay ---------- */
+  .alert-overlay{
+    position:fixed; left:0; right:0; bottom:0; z-index:60;
+    display:flex; justify-content:center; padding:14px;
+    pointer-events:none;
+  }
+  .alert-card{
+    pointer-events:auto;
+    background:var(--card); border:2px solid var(--amber);
+    border-radius:16px; box-shadow:0 10px 34px rgba(0,0,0,.35);
+    max-width:480px; width:100%; padding:16px 18px;
+    animation:slideUp .25s ease-out;
+  }
+  .alert-card.due{ border-color:var(--red); }
+  @keyframes slideUp{ from{transform:translateY(30px); opacity:0;} to{transform:translateY(0); opacity:1;} }
+  .alert-kicker{
+    font-family:'Oswald'; font-size:12.5px; text-transform:uppercase; letter-spacing:.08em;
+    color:var(--amber); margin-bottom:4px;
+  }
+  .alert-card.due .alert-kicker{ color:var(--red); }
+  .alert-title{font-size:19px; font-weight:700; margin-bottom:8px;}
+  .alert-body{font-size:14.5px; line-height:1.6; margin-bottom:6px;}
+  .alert-body .off-on{font-size:16px; font-weight:700; margin:6px 0;}
+  .alert-body .off-on .off{color:var(--red);}
+  .alert-body .off-on .on{color:var(--pitch-light);}
+  .alert-queue-note{font-size:11.5px; color:var(--ink-soft); margin-bottom:8px;}
+  .alert-dismiss{
+    width:100%; margin-top:10px; background:var(--pitch); color:#fff; border:none;
+    padding:11px; border-radius:10px; font-family:'Oswald'; font-size:15px; cursor:pointer;
+  }
+
+  /* ---------- Confirm modal (safeguard) ---------- */
+  .modal-overlay{
+    position:fixed; inset:0; background:rgba(10,14,10,.55); z-index:70;
+    display:flex; align-items:center; justify-content:center; padding:20px;
+  }
+  .modal-overlay.hidden{display:none;}
+  .modal-card{
+    background:var(--card); border-radius:16px; padding:22px; max-width:380px; width:100%;
+    box-shadow:0 12px 40px rgba(0,0,0,.4); text-align:center;
+  }
+  .modal-card h3{margin:0 0 8px; font-size:19px;}
+  .modal-card p{font-size:13.5px; color:var(--ink-soft); line-height:1.6; margin:0 0 18px;}
+  .modal-actions{display:flex; gap:10px;}
+  .modal-actions button{
+    flex:1; padding:11px; border-radius:10px; font-weight:600; font-size:14px; cursor:pointer; border:1px solid var(--line);
+  }
+  .modal-actions .cancel-btn{background:var(--bg-alt); color:var(--ink);}
+  .modal-actions .confirm-btn{background:var(--pitch); color:#fff; border-color:var(--pitch);}
+
+  /* ---------- Live console (goals, subs log, report trigger) ---------- */
+  .console-actions{display:flex; gap:10px; flex-wrap:wrap; margin:10px 0 4px;}
+  .console-btn{
+    font-family:'Oswald'; font-size:14px; letter-spacing:.02em; border:none; border-radius:10px;
+    padding:11px 16px; cursor:pointer; color:#fff;
+  }
+  .console-btn.goal{background:var(--pitch);}
+  .console-btn.opp-goal{background:var(--amber);}
+  .console-btn.report{background:var(--pitch-light);}
+  .console-btn.ghost-btn{background:var(--bg-alt); color:var(--ink-soft); font-family:'Inter'; font-size:12.5px; font-weight:600; padding:9px 14px;}
+  .score-strip{
+    display:flex; align-items:baseline; gap:10px; font-family:'Oswald'; font-size:26px; margin:6px 0 4px;
+  }
+  .score-strip .vs{font-size:13px; color:var(--ink-soft); font-family:'Inter'; font-weight:600;}
+  .event-log{list-style:none; margin:10px 0 0; padding:0;}
+  .event-log li{
+    display:flex; gap:10px; padding:7px 0; border-bottom:1px dashed var(--line); font-size:13px; align-items:baseline;
+  }
+  .event-log li:last-child{border-bottom:none;}
+  .event-log .time{font-family:'Oswald'; color:var(--pitch-light); min-width:38px; font-weight:600;}
+  .event-log .icon{width:18px; text-align:center;}
+
+  /* ---------- Player picker modal ---------- */
+  .picker-list{display:flex; flex-direction:column; gap:8px; max-height:340px; overflow-y:auto; margin-bottom:14px;}
+  .picker-list button{
+    background:var(--bg-alt); border:1px solid var(--line); color:var(--ink);
+    padding:12px; border-radius:10px; font-size:15px; font-weight:600; cursor:pointer; text-align:left;
+  }
+  .picker-list button.secondary-option{color:var(--ink-soft); font-weight:500; font-style:italic;}
+  .picker-list button:active{ background:var(--pitch); color:#fff; }
+
+  /* ---------- Match report ---------- */
+  .report-score{font-family:'Oswald'; font-size:34px; text-align:center; margin:8px 0 4px;}
+  .report-score .opp{color:var(--ink-soft); font-size:20px;}
+  .report-meta-line{text-align:center; font-size:12.5px; color:var(--ink-soft); margin-bottom:14px;}
+</style>
+</head>
+<body>
+
+<div class="live-bar hidden" id="liveBar">
+  <div class="live-bar-inner">
+    <div class="live-info">
+      <span class="live-dot" id="liveDot"></span>
+      <div>
+        <div class="live-title">LIVE · Match <span id="liveMatchNum"></span> vs <span id="liveOpponent"></span></div>
+        <div class="live-clock"><b id="liveRemaining">50:00</b> remaining &nbsp;·&nbsp; <span id="liveElapsed">0:00</span> elapsed</div>
+      </div>
+    </div>
+    <div class="live-score-block">
+      <span id="liveScoreUs">0</span><span class="live-score-sep">–</span><span id="liveScoreThem">0</span>
+      <div class="live-score-label">us <span id="liveScoreOppName"></span></div>
+    </div>
+    <div class="live-controls">
+      <button id="livePauseBtn">⏸ Pause</button>
+      <button id="liveResumeBtn" class="primary hidden">▶ Resume</button>
+      <button id="liveEndBtn" class="ghost">End</button>
+    </div>
+  </div>
+</div>
+
+<div class="alert-overlay hidden" id="alertOverlay">
+  <div class="alert-card" id="alertCard">
+    <div class="alert-kicker" id="alertKicker">Substitution</div>
+    <div class="alert-title" id="alertTitle"></div>
+    <div class="alert-body" id="alertBody"></div>
+    <div class="alert-queue-note hidden" id="alertQueueNote"></div>
+    <button class="alert-dismiss hidden" id="alertConfirmSubBtn">✅ Confirm substitution made</button>
+    <button class="alert-dismiss" id="alertDismissBtn">Got it</button>
+  </div>
+</div>
+
+<div class="modal-overlay hidden" id="confirmModal">
+  <div class="modal-card">
+    <h3 id="confirmTitle"></h3>
+    <p id="confirmBody"></p>
+    <div class="modal-actions">
+      <button class="cancel-btn" id="confirmCancelBtn">Cancel</button>
+      <button class="confirm-btn" id="confirmOkBtn">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay hidden" id="playerPickerModal">
+  <div class="modal-card">
+    <h3 id="pickerTitle"></h3>
+    <p id="pickerBody"></p>
+    <div class="picker-list" id="pickerList"></div>
+    <div class="modal-actions">
+      <button class="cancel-btn" id="pickerCancelBtn">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<header class="top">
+  <div class="top-row">
+    <div class="brand">
+      <span class="kicker">JAKD63 · Team Ops</span>
+      <h1>Matchday Squad Rotation</h1>
+    </div>
+    <div class="theme-toggle" id="themeToggle" role="button" aria-label="Toggle dark mode">
+      <span>☀️</span><div class="knob"></div><span>🌙</span>
+    </div>
+  </div>
+  <div class="sync-pill" id="syncPill"><span class="sync-dot local" id="syncDot"></span><span id="syncLabel">Checking sync…</span></div>
+</header>
+
+<div class="match-strip" id="matchStrip"></div>
+
+<main>
+  <div class="card hidden" id="liveConsoleCard"></div>
+  <div class="card hidden" id="reportCard"></div>
+  <div class="grid">
+    <div>
+      <div class="card" id="fixtureCard"></div>
+      <div class="card" id="squadCard"></div>
+    </div>
+    <div>
+      <div class="card" id="timelineCard"></div>
+      <div class="card" id="seasonCard"></div>
+    </div>
+  </div>
+</main>
+
+<footer class="app-footer">
+  Half length used for all calculations: <b id="halfLenNote"></b> — this is the standard FA youth framework figure for 7v7
+  (two equal halves), cross-checked from multiple grassroots league rule sets, since the Cheltenham Youth League handbook PDF
+  blocks automated fetching. Open the handbook yourself and use the settings note below to correct this if your division's
+  handbook states a different figure — the whole app recalculates from that one number.
+</footer>
+
+<script>
+/* =========================================================================
+   1. CONFIG — fill this in with your own free Firebase project to get
+      live multi-coach, multi-device sync. Until you do, the app runs in
+      LOCAL MODE (saved to this browser only via localStorage) so it's
+      still fully usable right now. See the chat reply for setup steps.
+   ========================================================================= */
+  const firebaseConfig = {
+    apiKey: "REPLACE_ME",
+    authDomain: "REPLACE_ME.firebaseapp.com",
+    projectId: "REPLACE_ME",
+    storageBucket: "REPLACE_ME.appspot.com",
+    messagingSenderId: "REPLACE_ME",
+    appId: "REPLACE_ME"
+  };
+  const FIRESTORE_COLLECTION = "jakd63-roster";
+  const FIRESTORE_DOC = "season-2026-27";
+
+/* =========================================================================
+   2. DATA — players, fixtures, and the one editable assumption (half length)
+   ========================================================================= */
+  const PLAYERS = ["Alfie","Arlo","Bert","Callum","Cruz","Elliott","Henry","Raf","Roman","Ted","Theo","Tommy","Zachary"];
+
+  // The 7 on-field slots for this formation (GK + 3 defence + 3 mid/attack —
+  // centre mid doubles as the striker role, per the coach's note).
+  const POSITIONS = ["GK","CD","RD","LD","CM","RM","LM"];
+  const POSITION_LABEL = {
+    GK:"Goalkeeper", CD:"Centre Defence", RD:"Right Defence", LD:"Left Defence",
+    CM:"Centre Mid / Striker", RM:"Right Mid", LM:"Left Mid"
+  };
+  const DEF_SLOTS = ["CD","RD","LD"];
+  const MID_SLOTS = ["CM","RM","LM"];
+
+  // Eligibility, built from the coach's per-player position notes.
+  // "defender"/"midfielder"/"winger"/"forward" (general) map onto any slot in
+  // that family; specific roles (e.g. Roman = centre defender only) are kept tight.
+  const PLAYER_POSITIONS = {
+    Bert:    ["GK", ...DEF_SLOTS],
+    Callum:  ["GK", ...DEF_SLOTS],
+    Theo:    [...DEF_SLOTS],
+    Cruz:    [...MID_SLOTS],                 // midfielder / winger / forward
+    Alfie:   [...MID_SLOTS, ...DEF_SLOTS],    // midfielder / winger / defence
+    Arlo:    [...MID_SLOTS, ...DEF_SLOTS],    // midfielder / forward / defender
+    Raf:     [...MID_SLOTS, ...DEF_SLOTS],    // midfielder / forward / defender
+    Roman:   ["CD"],                          // centre defender only
+    Zachary: ["GK","CM"],                     // goalkeeper / forward
+    Elliott: ["GK", ...MID_SLOTS],            // goalkeeper / forward / midfielder
+    Tommy:   [...DEF_SLOTS],
+    Ted:     [...MID_SLOTS],                  // Teddy
+    Henry:   [...DEF_SLOTS, ...MID_SLOTS]     // defender / midfielder
+  };
+
+  // ASSUMPTION — flagged in footer above. Change this if your handbook differs.
+  const HALF_MINUTES = 25;
+  const MATCH_MINUTES = HALF_MINUTES * 2;
+  const MAX_SUBS = 3; // per league rule quoted to the app
+
+  const FIXTURES = [
+    {n:1,  opp:"Southside Star Youth",         date:"Sat 5 Sep 2026",   time:"09:10", loc:"Bourneside Sports Centre Pitch 5"},
+    {n:2,  opp:"Churchdown Panthers",          date:"Sat 12 Sep 2026",  time:"09:10", loc:"Home Parish Fields Pitch 10"},
+    {n:3,  opp:"Longford Youth Blues",         date:"Sat 19 Sep 2026",  time:"09:10", loc:"Home Parish Field Pitch 9"},
+    {n:4,  opp:"Leckhampton Youth Rovers",     date:"Sat 26 Sep 2026",  time:"09:10", loc:"Home Parish Fields Pitch 9"},
+    {n:5,  opp:"Tewkesbury Town Colts",        date:"Sat 3 Oct 2026",   time:"09:10", loc:"YMCA Playing Fields Pitch 2"},
+    {n:6,  opp:"Winchcombe Town Youth",        date:"Sat 10 Oct 2026",  time:"09:10", loc:"Home Parish Fields Pitch 10"},
+    {n:7,  opp:"Bishops Cleeve Colts Youth",   date:"Sat 10 Oct 2026",  time:"09:10", loc:"Home Parish Fields Pitch 10"},
+    {n:8,  opp:"Charlton Rovers Youth",        date:"Sat 7 Nov 2026",   time:"09:10", loc:"Shipton Playing Fields Pitch 3"},
+    {n:9,  opp:"Cheltenham Town Women",        date:"Sat 14 Nov 2026",  time:"09:10", loc:"Bishops Cleeve Astro Pitch 1"},
+    {n:10, opp:"Winchcombe Town Wanderers",    date:"Sat 21 Nov 2026",  time:"09:10", loc:"TBC"},
+    {n:11, opp:"Southside Star Youth",         date:"Sat 28 Nov 2026",  time:"09:10", loc:"Home Parish Fields Pitch 10"},
+    {n:12, opp:"Churchdown Panthers Youth",    date:"Sat 5 Dec 2026",   time:"09:10", loc:"Churchdown School Academy Pitch 3 (Middle Pitch)"},
+    {n:13, opp:"Tewkesbury Town Colts",        date:"Sat 12 Dec 2026",  time:"09:10", loc:"Home Parish Fields Pitch 10"},
+    {n:14, opp:"Longford Youth Blues",         date:"Sat 2 Jan 2026",   time:"09:10", loc:"Norton Recreation Field", dateFlag:true},
+    {n:15, opp:"Bishops Cleeve Youth Colts",   date:"Sat 9 Jan 2026",   time:"09:10", loc:"Home Parish Fields Pitch 10", dateFlag:true},
+    {n:16, opp:"Charlton Rovers Youth",        date:"Sat 16 Jan 2026",  time:"09:10", loc:"Home Parish Fields Pitch 9", dateFlag:true},
+    {n:17, opp:"Cheltenham Town Women",        date:"Sat 23 Jan 2026",  time:"09:10", loc:"Home Parish Fields Pitch 10", dateFlag:true},
+    {n:18, opp:"Winchcombe Town Youth",        date:"Sat 30 Jan 2026",  time:"09:10", loc:"Winchcombe School Pitch 2", dateFlag:true},
+    {n:19, opp:"Winchcombe Town Wanderers",    date:"Sat 6 Feb 2026",   time:"09:10", loc:"Home Parish Fields Pitch 9", dateFlag:true},
+    {n:20, opp:"Southside Star Youth",         date:"Sat 27 Feb 2026",  time:"09:10", loc:"Hatherley Park Pitch 1", dateFlag:true},
+    {n:21, opp:"Churchdown Panthers Youth",    date:"Sat 6 Mar 2026",   time:"09:10", loc:"Churchdown School Academy Pitch 3 (Middle Pitch)", dateFlag:true},
+    {n:22, opp:"Longford Youth Blues",         date:"Sat 13 Mar 2026",  time:"09:10", loc:"Home Parish Fields Pitch 9", dateFlag:true},
+    {n:23, opp:"Tewkesbury Town Colts",        date:"Sat 20 Mar 2026",  time:"09:10", loc:"YMCA Playing Fields Pitch 2", dateFlag:true},
+    {n:24, opp:"Winchcombe Town Youth",        date:"Sat 17 Apr 2026",  time:"09:10", loc:"Home Parish Fields Pitch 9", dateFlag:true},
+    {n:25, opp:"Charlton Rovers Youth",        date:"Sat 24 Apr 2026",  time:"09:10", loc:"Shipton Playing Fields Pitch 3", dateFlag:true},
+  ];
+
+  const MATCH1_STARTERS = ["Elliott","Alfie","Arlo","Bert","Roman","Ted","Callum"];
+  const MATCH1_SUBS = ["Cruz","Theo","Raf"];
+
+/* =========================================================================
+   3. FAIRNESS ENGINE
+   ---------------------------------------------------------------------
+   Per match: pick up to 10 available players (7 on pitch + up to 3 subs),
+   ranked so whoever has the fewest minutes / fewest appearances / longest
+   rest gets picked first. That single rule is what keeps the season
+   total equal AND automatically pays back anyone marked unavailable —
+   they simply rank first as soon as they're available again.
+
+   Within a match: a sliding "rest window" of size (rosterSize-7) rotates
+   through the roster in equal time-blocks, so every rostered player gets
+   exactly the same share of the 7 on-field minutes for that match, using
+   exactly one substitution per changeover (never more than 3 players sit
+   the bench at kick-off, matching the league's 3-substitute rule).
+   ========================================================================= */
+
+  function buildRotationSchedule(rosterOrdered, totalMinutes, onFieldCount){
+    const R = rosterOrdered.length;
+    const winSize = Math.max(0, R - onFieldCount);
+    const blockLen = R > 0 ? totalMinutes / R : 0;
+    const windows = [];
+    for(let k=0;k<R;k++){
+      const w = new Set();
+      for(let j=0;j<winSize;j++) w.add((k+onFieldCount+j)%R);
+      windows.push(w);
+    }
+    const events = [];
+    for(let k=1;k<R;k++){
+      const prev = windows[k-1], cur = windows[k];
+      let on, off;
+      for(const idx of prev){ if(!cur.has(idx)){ on = idx; break; } }
+      for(const idx of cur){ if(!prev.has(idx)){ off = idx; break; } }
+      if(on !== undefined && off !== undefined){
+        events.push({
+          atMinute: Math.round(blockLen * k * 10) / 10,
+          on: rosterOrdered[on],
+          off: rosterOrdered[off],
+          isHalftime: Math.abs(blockLen*k - totalMinutes/2) < 0.01
+        });
+      }
+    }
+    const onFieldAtStart = rosterOrdered.filter((_,i)=>!windows[0].has(i));
+    const benchAtStart = rosterOrdered.filter((_,i)=>windows[0].has(i));
+    const minutesEachValue = R > 0 ? (totalMinutes * onFieldCount / R) : 0;
+    return {onFieldAtStart, benchAtStart, events, minutesEachValue, blockLen, rosterSize:R};
+  }
+
+  // A normal match rotates all of `rosterOrdered` through 7 on-field slots.
+  // When `pinnedGK` is set, that one player plays the full match in goal
+  // (never rotated out) and everyone else rotates through the remaining 6
+  // outfield slots, sharing those minutes equally among themselves — this
+  // is how the app guarantees a keeper is on the pitch every minute when
+  // only one keeper-capable player is available that week.
+  function buildInMatchSchedule(rosterOrdered, totalMinutes, pinnedGK){
+    if(!pinnedGK){
+      const s = buildRotationSchedule(rosterOrdered, totalMinutes, 7);
+      const minutesByPlayer = {};
+      rosterOrdered.forEach(p => minutesByPlayer[p] = s.minutesEachValue);
+      return {...s, minutesByPlayer, pinnedGK:null};
+    }
+    const others = rosterOrdered.filter(p => p !== pinnedGK);
+    const s = buildRotationSchedule(others, totalMinutes, 6);
+    const minutesByPlayer = {[pinnedGK]: totalMinutes};
+    others.forEach(p => minutesByPlayer[p] = s.minutesEachValue);
+    return {
+      onFieldAtStart: [pinnedGK, ...s.onFieldAtStart],
+      benchAtStart: s.benchAtStart,
+      events: s.events,
+      minutesByPlayer,
+      blockLen: s.blockLen,
+      rosterSize: rosterOrdered.length,
+      pinnedGK
+    };
+  }
+
+/* -------------------------------------------------------------------------
+   POSITION ENGINE — Kuhn's algorithm (max bipartite matching, via augmenting
+   paths) assigns each on-field player to a specific slot, and re-solves with
+   minimal disruption every time a substitution changes who's on the pitch.
+   ------------------------------------------------------------------------- */
+  function eligiblePositionsFor(name){ return PLAYER_POSITIONS[name] || []; }
+  // Used whenever GK is already spoken for (pinned) — the rest of the squad
+  // is only ever matched against the 6 outfield slots, never GK.
+  function outfieldPositionsFor(name){ return eligiblePositionsFor(name).filter(p => p !== 'GK'); }
+
+  // Shortest augmenting path (BFS) from `player` to a free position, through
+  // the eligibility graph — this finds the FEWEST other players that need to
+  // change position to fit the new player in. Mutates matchPos on success.
+  function augmentPath(player, matchPos, eligFn){
+    eligFn = eligFn || eligiblePositionsFor;
+    for(const pos of eligFn(player)){
+      if(!matchPos[pos]){ matchPos[pos] = player; return true; } // direct fit, 0 disruption
+    }
+    const visitedPos = new Set();
+    const parent = {}; // pos -> {via: playerMovedIn, prevPos: pos|null}
+    const queue = [];
+    eligFn(player).forEach(pos => {
+      visitedPos.add(pos); parent[pos] = {via:player, prevPos:null}; queue.push(pos);
+    });
+    let target = null;
+    while(queue.length && !target){
+      const pos = queue.shift();
+      const occupant = matchPos[pos];
+      for(const npos of eligFn(occupant)){
+        if(visitedPos.has(npos)) continue;
+        visitedPos.add(npos);
+        parent[npos] = {via:occupant, prevPos:pos};
+        if(!matchPos[npos]){ target = npos; break; }
+        queue.push(npos);
+      }
+    }
+    if(!target) return false;
+    // apply the chain: fill `target` first, then walk back freeing/filling as we go
+    let pos = target;
+    while(pos !== null){
+      const {via, prevPos} = parent[pos];
+      matchPos[pos] = via;
+      pos = prevPos;
+    }
+    return true;
+  }
+
+  // Build a full (or best-effort) assignment for a set of on-field players.
+  function assignPositions(players, eligFn){
+    eligFn = eligFn || eligiblePositionsFor;
+    const matchPos = {}; // pos -> player
+    // Most-constrained-first: players with fewer eligible slots get matched first,
+    // which finds a complete assignment whenever one exists.
+    const ordered = [...players].sort((a,b) => eligFn(a).length - eligFn(b).length);
+    const unplaced = [];
+    ordered.forEach(p => {
+      const ok = augmentPath(p, matchPos, eligFn);
+      if(!ok) unplaced.push(p);
+    });
+    const playerToPos = {};
+    Object.entries(matchPos).forEach(([pos,pl]) => playerToPos[pl] = pos);
+    unplaced.forEach(p => playerToPos[p] = null);
+    return {matchPos, playerToPos, unplaced};
+  }
+
+  // Re-solve after ONE substitution (off -> on): free the departing player's
+  // slot, then run the shortest augmenting path for the incoming player —
+  // this changes as few other players' positions as possible.
+  function reassignAfterSub(matchPos, offPlayer, onPlayer, eligFn){
+    const next = {...matchPos};
+    for(const pos of Object.keys(next)){ if(next[pos] === offPlayer) delete next[pos]; }
+    const ok = augmentPath(onPlayer, next, eligFn);
+    return {matchPos: next, ok};
+  }
+
+  // Walk a match's kickoff line-up + substitution timeline, attaching a
+  // position to every player at every point, with minimal reshuffling.
+  function computeMatchPositions(match){
+    const sched = match.schedule;
+    let kickoff;
+    const eligFn = sched.pinnedGK ? outfieldPositionsFor : eligiblePositionsFor;
+    if(sched.pinnedGK){
+      const others = sched.onFieldAtStart.filter(p => p !== sched.pinnedGK);
+      const othersAssign = assignPositions(others, eligFn);
+      kickoff = {matchPos: {GK: sched.pinnedGK, ...othersAssign.matchPos}, unplaced: othersAssign.unplaced};
+    } else {
+      kickoff = assignPositions(sched.onFieldAtStart, eligFn);
+    }
+    let cur = kickoff.matchPos;
+    const warnings = [];
+    if(kickoff.unplaced.length){
+      warnings.push(`Couldn't place ${kickoff.unplaced.join(', ')} into an eligible outfield position — needs a manual swap.`);
+    }
+    if(!kickoff.matchPos['GK']){
+      warnings.push('No goalkeeper-eligible player in this squad at all — Bert, Callum, Zachary and Elliott are all unavailable or missing.');
+    }
+
+    const eventsWithPos = [];
+    sched.events.forEach(ev => {
+      const {matchPos: next, ok} = reassignAfterSub(cur, ev.off, ev.on, eligFn);
+      const onPos = Object.keys(next).find(pos => next[pos] === ev.on);
+      const changedFrom = [];
+      Object.keys(cur).forEach(pos => {
+        if(cur[pos] !== next[pos] && next[pos] && next[pos] !== ev.on){
+          changedFrom.push({player: next[pos], newPos: pos});
+        }
+      });
+      eventsWithPos.push({...ev, onPos: onPos || null, reshuffled: changedFrom, feasible: ok});
+      if(!ok){ warnings.push(`${ev.on} has no valid outfield position to come on into at ${ev.atMinute}' — needs a manual swap.`); }
+      cur = next;
+    });
+
+    return {kickoffAssignment: kickoff.matchPos, kickoffUnplaced: kickoff.unplaced, events: eventsWithPos, finalAssignment: cur, warnings};
+  }
+
+  const TRAINED_KEEPERS = ["Bert","Callum"];
+  const EMERGENCY_KEEPERS = ["Zachary","Elliott"];
+
+  // Goalkeeper policy: Bert/Callum are the only trained keepers, so one of
+  // them plays every match they're available for, alternating between the
+  // two by whoever has kept goal fewer times so far. Zachary/Elliott are
+  // emergency-only cover, used solely when BOTH Bert and Callum are out.
+  function pickGoalkeeper(available, state){
+    const bestOf = (pool) => [...pool].sort((a,b) => {
+      const d = (state[a].gkAppearances||0) - (state[b].gkAppearances||0);
+      if(d !== 0) return d;
+      const d2 = state[a].minutes - state[b].minutes;
+      if(d2 !== 0) return d2;
+      return a.localeCompare(b);
+    })[0];
+    const trained = available.filter(p => TRAINED_KEEPERS.includes(p));
+    if(trained.length) return {gk: bestOf(trained), tier:'trained'};
+    const emergency = available.filter(p => EMERGENCY_KEEPERS.includes(p));
+    if(emergency.length) return {gk: bestOf(emergency), tier:'emergency'};
+    return {gk: null, tier:'none'};
+  }
+
+  function computeSeason(unavailabilityMap){
+    const state = {};
+    PLAYERS.forEach(p => state[p] = {minutes:0, rostered:0, started:0, lastPlayed:0, gkAppearances:0});
+    const results = [];
+
+    function applyState(matchIdx, roster, starters, sched, pinnedGK){
+      roster.forEach(p => {
+        state[p].minutes += (sched.minutesByPlayer[p] || 0);
+        state[p].rostered += 1;
+        state[p].lastPlayed = matchIdx;
+      });
+      starters.forEach(p => state[p].started += 1);
+      if(pinnedGK) state[pinnedGK].gkAppearances += 1;
+    }
+
+    function fairnessSort(list){
+      return [...list].sort((a,b) => {
+        const sa = state[a], sb = state[b];
+        if(sa.minutes !== sb.minutes) return sa.minutes - sb.minutes;
+        if(sa.rostered !== sb.rostered) return sa.rostered - sb.rostered;
+        if(sa.lastPlayed !== sb.lastPlayed) return sa.lastPlayed - sb.lastPlayed;
+        return a.localeCompare(b);
+      });
+    }
+
+    // Shared builder for "pin a keeper, rotate everyone else" squads.
+    // outfieldPool: players other than the pinned GK, already the exact
+    // squad for this match (ranking/selection already applied by the caller).
+    function buildPinnedSquad(pinnedGK, outfieldPool, preferredStarters){
+      const outfieldStarters = preferredStarters
+        ? preferredStarters.filter(p => outfieldPool.includes(p))
+        : [...outfieldPool].sort((a,b) => {
+            const d = state[a].started - state[b].started;
+            return d !== 0 ? d : a.localeCompare(b);
+          }).slice(0, Math.min(6, outfieldPool.length));
+      const outfieldSubs = outfieldPool.filter(p => !outfieldStarters.includes(p));
+      return {
+        orderedRoster: [pinnedGK, ...outfieldStarters, ...outfieldSubs],
+        startersPick: [pinnedGK, ...outfieldStarters],
+        subsPick: outfieldSubs
+      };
+    }
+
+    // --- Match 1: personnel fixed by the coach, and the coach wants Callum in goal ---
+    const m1full = [...MATCH1_STARTERS, ...MATCH1_SUBS];
+    const m1GK = "Callum"; // explicit coach instruction — Callum keeps for Match 1
+    const m1Outfield = m1full.filter(p => p !== m1GK);
+    const m1Preferred = MATCH1_STARTERS.filter(p => p !== m1GK); // keeps the coach's original starters as outfield starters
+    const m1Built = buildPinnedSquad(m1GK, m1Outfield, m1Preferred);
+    const sched1 = buildInMatchSchedule(m1full, MATCH_MINUTES, m1GK);
+    applyState(1, m1full, m1Built.startersPick, sched1, m1GK);
+    results.push({
+      fixture: FIXTURES[0], roster:m1full, starters:m1Built.startersPick, subs:m1Built.subsPick,
+      rested: PLAYERS.filter(p=>!m1full.includes(p)), unavailable:[], schedule:sched1,
+      fixed:true, warning:null, gkNote:`${m1GK} plays the full match in goal and won't be rotated off.`
+    });
+
+    // --- Matches 2-25: fairness engine + goalkeeper policy ---
+    for(let i=2;i<=25;i++){
+      const unavailable = (unavailabilityMap[i] || []).slice();
+      const available = PLAYERS.filter(p => !unavailable.includes(p));
+
+      const gkPick = pickGoalkeeper(available, state);
+      const pinnedGK = gkPick.gk;
+
+      let gkNote = null;
+      if(gkPick.tier === 'none'){
+        gkNote = `None of the keeper-capable players (Bert, Callum, Zachary, Elliott) are available this week — the team has no goalkeeper cover. Consider moving the fixture or sourcing cover.`;
+      } else if(gkPick.tier === 'emergency'){
+        gkNote = `Neither Bert nor Callum is available this week, so ${pinnedGK} covers in goal as emergency keeper (Elliott/Zachary are only used in goal when both trained keepers are out).`;
+      } else {
+        gkNote = `${pinnedGK} plays the full match in goal and won't be rotated off, alternating with ${TRAINED_KEEPERS.find(k=>k!==pinnedGK)} match to match.`;
+      }
+
+      // The pinned keeper is guaranteed a place regardless of the usual
+      // fairness ranking — the outfield squad is then filled by whoever
+      // has the least game time so far, exactly as before.
+      const outfieldAvailable = available.filter(p => p !== pinnedGK);
+      const rankedOutfield = fairnessSort(outfieldAvailable);
+      const outfieldCount = pinnedGK ? Math.min(9, rankedOutfield.length) : Math.min(10, rankedOutfield.length);
+      const outfieldPool = rankedOutfield.slice(0, outfieldCount);
+
+      const roster = pinnedGK ? [pinnedGK, ...outfieldPool] : outfieldPool;
+      const rested = PLAYERS.filter(p => !roster.includes(p) && !unavailable.includes(p));
+
+      let orderedRoster, startersPick, subsPick;
+      if(pinnedGK){
+        const built = buildPinnedSquad(pinnedGK, outfieldPool, null);
+        orderedRoster = built.orderedRoster; startersPick = built.startersPick; subsPick = built.subsPick;
+      } else {
+        // total blackout: no keeper-capable player available at all — degrade
+        // to the old uniform 7-a-side rotation (flagged heavily) rather than
+        // leaving no plan at all.
+        startersPick = [...roster].sort((a,b) => {
+          const d = state[a].started - state[b].started;
+          return d !== 0 ? d : a.localeCompare(b);
+        }).slice(0, Math.min(7, roster.length));
+        subsPick = roster.filter(p => !startersPick.includes(p));
+        orderedRoster = [...startersPick, ...subsPick];
+      }
+
+      const R = orderedRoster.length;
+      const sched = buildInMatchSchedule(orderedRoster, MATCH_MINUTES, pinnedGK);
+      applyState(i, orderedRoster, startersPick, sched, pinnedGK);
+
+      let warning = null;
+      if(R < 7){
+        warning = `Only ${R} player${R===1?'':'s'} available — below the 7 needed to field a side. Check with the opposition / league.`;
+      } else if(R < 10){
+        warning = `Only ${R} players available this week — full squad rotation will resume automatically once more players are available.`;
+      }
+
+      results.push({
+        fixture: FIXTURES[i-1], roster:orderedRoster, starters:startersPick, subs:subsPick,
+        rested, unavailable, schedule:sched, fixed:false, warning, gkNote
+      });
+    }
+
+    return {results, finalState: state};
+  }
+
+/* =========================================================================
+   4. STATE + PERSISTENCE (Firestore if configured, else localStorage)
+   ========================================================================= */
+  let unavailability = {}; // { matchNumber: [names] }
+  let currentMatch = 1;
+  let liveState = null; // {matchNum, status:'running'|'paused'|'ended', kickoffAt, pausedAt, totalPausedMs, snapshot, onFieldSet, subsLog, goals, opponentGoals}
+  let matchReports = {}; // { matchNumber: reportObject } — persists after a live session ends
+  let useFirestore = false;
+  let db = null;
+
+  function isConfigFilled(){
+    return firebaseConfig.apiKey && firebaseConfig.apiKey !== "REPLACE_ME" && firebaseConfig.projectId !== "REPLACE_ME";
+  }
+
+  function setSyncPill(mode){
+    const dot = document.getElementById('syncDot');
+    const label = document.getElementById('syncLabel');
+    if(mode === 'live'){
+      dot.className = 'sync-dot';
+      label.textContent = 'Live sync — shared with all coaches';
+    } else if(mode === 'connecting'){
+      dot.className = 'sync-dot local';
+      label.textContent = 'Connecting to shared sync…';
+    } else {
+      dot.className = 'sync-dot local';
+      label.textContent = 'Local mode — saved on this device only (add Firebase config for shared sync)';
+    }
+  }
+
+  function loadLocal(){
+    try{
+      const raw = localStorage.getItem('jakd63-unavailability');
+      unavailability = raw ? JSON.parse(raw) : {};
+    }catch(e){ unavailability = {}; }
+    try{
+      const rawLive = localStorage.getItem('jakd63-live');
+      liveState = rawLive ? JSON.parse(rawLive) : null;
+    }catch(e){ liveState = null; }
+    try{
+      const rawReports = localStorage.getItem('jakd63-reports');
+      matchReports = rawReports ? JSON.parse(rawReports) : {};
+    }catch(e){ matchReports = {}; }
+  }
+  function saveLocal(){
+    localStorage.setItem('jakd63-unavailability', JSON.stringify(unavailability));
+  }
+  function persistReports(){
+    if(useFirestore && db){
+      db.collection(FIRESTORE_COLLECTION).doc(FIRESTORE_DOC).set({reports: matchReports}, {merge:true}).catch(e => console.error(e));
+    } else {
+      try{ localStorage.setItem('jakd63-reports', JSON.stringify(matchReports)); }catch(e){}
+    }
+  }
+
+  function initFirebase(){
+    if(!isConfigFilled()){
+      setSyncPill('offline');
+      loadLocal();
+      renderAll();
+      return;
+    }
+    try{
+      setSyncPill('connecting');
+      firebase.initializeApp(firebaseConfig);
+      db = firebase.firestore();
+      useFirestore = true;
+      const ref = db.collection(FIRESTORE_COLLECTION).doc(FIRESTORE_DOC);
+      ref.onSnapshot((snap) => {
+        setSyncPill('live');
+        if(snap.exists){
+          const data = snap.data() || {};
+          unavailability = data.unavailability || {};
+          liveState = data.live || null;
+          matchReports = data.reports || {};
+        } else {
+          unavailability = {};
+          liveState = null;
+          matchReports = {};
+          ref.set({unavailability:{}, live:null, reports:{}}, {merge:true});
+        }
+        renderAll();
+        updateLiveBarDisplay();
+      }, (err) => {
+        console.error('Firestore sync error, falling back to local mode:', err);
+        useFirestore = false;
+        setSyncPill('offline');
+        loadLocal();
+        renderAll();
+      });
+    }catch(e){
+      console.error(e);
+      useFirestore = false;
+      setSyncPill('offline');
+      loadLocal();
+      renderAll();
+    }
+  }
+
+  function toggleAvailability(matchNum, name){
+    const key = String(matchNum);
+    const list = unavailability[key] ? [...unavailability[key]] : [];
+    const idx = list.indexOf(name);
+    if(idx >= 0) list.splice(idx,1); else list.push(name);
+    unavailability = {...unavailability, [key]: list};
+
+    if(useFirestore && db){
+      db.collection(FIRESTORE_COLLECTION).doc(FIRESTORE_DOC).set({unavailability}, {merge:true});
+      // onSnapshot will re-render with the confirmed server state
+    } else {
+      saveLocal();
+      renderAll();
+    }
+  }
+
+/* =========================================================================
+   5. LIVE MATCH TIMER
+   ---------------------------------------------------------------------
+   Kickoff freezes a snapshot of that match's substitution plan (so the
+   live game isn't disrupted if someone edits availability mid-match),
+   then a synced clock (kickoffAt/pausedAt/totalPausedMs, shared over the
+   same Firestore doc as everything else) drives two alerts per
+   substitution — a 2-minute warning, then the change itself — plus a
+   confirm-guarded Resume button so an accidental tap can't restart the
+   clock by mistake.
+   ========================================================================= */
+  let shownAlertKeys = new Set();
+  let lastLiveKey = null;
+  let alertQueue = [];
+
+  function computeLiveSnapshot(matchNum){
+    const season = computeSeason(unavailability);
+    const match = season.results.find(r => r.fixture.n === matchNum);
+    if(!match) return null;
+    const positions = computeMatchPositions(match);
+    const startingSeven = match.schedule.onFieldAtStart.map(name => {
+      const posEntry = Object.entries(positions.kickoffAssignment || {}).find(([,pl]) => pl === name);
+      return {name, pos: posEntry ? posEntry[0] : null};
+    });
+    return {
+      opponent: match.fixture.opp,
+      fixtureDate: match.fixture.date,
+      totalMinutes: MATCH_MINUTES,
+      startingSeven,
+      events: positions.events.map(e => ({
+        atMinute: e.atMinute, on: e.on, off: e.off, onPos: e.onPos,
+        isHalftime: !!e.isHalftime, feasible: e.feasible,
+        reshuffled: (e.reshuffled || []).map(r => ({player: r.player, newPos: r.newPos}))
+      }))
+    };
+  }
+
+  function getElapsedMs(live){
+    if(!live) return 0;
+    if(live.status === 'paused') return Math.max(0, live.pausedAt - live.kickoffAt - live.totalPausedMs);
+    if(live.status === 'running') return Math.max(0, Date.now() - live.kickoffAt - live.totalPausedMs);
+    if(live.status === 'ended') return Math.max(0, (live.endedAt || (live.kickoffAt + live.snapshot.totalMinutes*60000)) - live.kickoffAt - live.totalPausedMs);
+    return 0;
+  }
+  function fmtClock(ms){
+    const totalSec = Math.max(0, Math.floor(ms/1000));
+    const m = Math.floor(totalSec/60), s = totalSec % 60;
+    return m + ':' + String(s).padStart(2,'0');
+  }
+
+  function writeLive(newLive){
+    liveState = newLive;
+    if(useFirestore && db){
+      db.collection(FIRESTORE_COLLECTION).doc(FIRESTORE_DOC).set({live: newLive}, {merge:true}).catch(e => console.error(e));
+    } else {
+      try{ localStorage.setItem('jakd63-live', newLive ? JSON.stringify(newLive) : ''); }catch(e){}
+    }
+    updateLiveBarDisplay();
+    renderLiveConsole();
+    const season = computeSeason(unavailability);
+    const match = season.results.find(r => r.fixture.n === currentMatch);
+    if(match && document.getElementById('kickoffArea')) renderKickoffArea(match);
+  }
+
+  function startKickoff(matchNum){
+    const snapshot = computeLiveSnapshot(matchNum);
+    if(!snapshot) return;
+    writeLive({
+      matchNum, status:'running', kickoffAt: Date.now(), pausedAt:null, totalPausedMs:0, snapshot,
+      onFieldSet: snapshot.startingSeven.map(p => p.name),
+      subsLog: [], goals: [], opponentGoals: []
+    });
+  }
+  function pauseLive(){
+    if(!liveState || liveState.status !== 'running') return;
+    writeLive({...liveState, status:'paused', pausedAt: Date.now()});
+  }
+  function requestResumeLive(){
+    if(!liveState || liveState.status !== 'paused') return;
+    showConfirm(
+      'Resume the match?',
+      `This restarts the clock for Match ${liveState.matchNum} vs ${liveState.snapshot.opponent}. Only confirm once your players are ready to go again — this is the safeguard in case Resume gets tapped by accident.`,
+      'Yes, resume',
+      () => {
+        const now = Date.now();
+        writeLive({...liveState, status:'running', totalPausedMs: liveState.totalPausedMs + (now - liveState.pausedAt), pausedAt:null});
+      }
+    );
+  }
+  function endLive(){
+    if(!liveState) return;
+    showConfirm(
+      'End this match now?',
+      'This stops the clock so you can generate the match report. Goals and substitutions logged so far are kept — you can still review them afterwards.',
+      'End match',
+      () => { writeLive({...liveState, status:'ended', endedAt: Date.now()}); }
+    );
+  }
+  function clearLive(){
+    writeLive(null); shownAlertKeys = new Set(); alertQueue = []; renderAlertOverlay();
+  }
+
+  // ---- Confirm modal (also used as the resume/end safeguard) ----
+  function showConfirm(title, body, confirmLabel, onConfirm){
+    document.getElementById('confirmTitle').textContent = title;
+    document.getElementById('confirmBody').textContent = body;
+    const okBtn = document.getElementById('confirmOkBtn');
+    okBtn.textContent = confirmLabel;
+    const modal = document.getElementById('confirmModal');
+    modal.classList.remove('hidden');
+    const cleanup = () => modal.classList.add('hidden');
+    okBtn.onclick = () => { cleanup(); onConfirm(); };
+    document.getElementById('confirmCancelBtn').onclick = cleanup;
+  }
+
+  // ---- Substitution alert queue ----
+  function buzz(){
+    try{ if(navigator.vibrate) navigator.vibrate([180,90,180]); }catch(e){}
+    try{
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = ctx.createOscillator(), gain = ctx.createGain();
+      osc.type = 'sine'; osc.frequency.value = 880;
+      gain.gain.setValueAtTime(0.16, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.45);
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.start(); osc.stop(ctx.currentTime + 0.45);
+    }catch(e){}
+  }
+
+  function buildAlertContent(ev, phase){
+    const offOn = `<div class="off-on"><span class="off">OFF: ${ev.off}</span> &nbsp;→&nbsp; <span class="on">ON: ${ev.on}</span></div>`;
+    const posLine = `Into position: <b>${ev.onPos ? POSITION_LABEL[ev.onPos] : 'no clean fit found'}</b>`;
+    const reshuffle = ev.reshuffled.length
+      ? `<div style="margin-top:6px;">Also shift: ${ev.reshuffled.map(r => `<b>${r.player}</b> → ${POSITION_LABEL[r.newPos]}`).join(', ')}</div>` : '';
+    const halftime = ev.isHalftime
+      ? `<div style="margin-top:6px; color:var(--amber);">This is the half-time change — make it during your break, then tap <b>Resume</b> (with the confirm step) for the second half.</div>` : '';
+    const infeasible = ev.feasible === false
+      ? `<div style="margin-top:6px; color:var(--red);">⚠ No clean position fit was found here — use your judgement on where ${ev.on} goes.</div>` : '';
+    return {
+      title: phase === 'due' ? 'Make this substitution now' : 'Substitution coming up',
+      bodyHtml: offOn + posLine + reshuffle + halftime + infeasible
+    };
+  }
+
+  function pushAlert(alert){
+    alertQueue.push(alert);
+    buzz();
+    renderAlertOverlay();
+  }
+
+  function renderAlertOverlay(){
+    const overlay = document.getElementById('alertOverlay');
+    if(!alertQueue.length){ overlay.classList.add('hidden'); return; }
+    const a = alertQueue[0];
+    overlay.classList.remove('hidden');
+    document.getElementById('alertCard').className = 'alert-card' + (a.phase === 'due' ? ' due' : '');
+    document.getElementById('alertKicker').textContent = a.phase === 'due'
+      ? `Change due now · ${a.atMinute}'` : `2-minute warning · due at ${a.atMinute}'`;
+    document.getElementById('alertTitle').textContent = a.title;
+    document.getElementById('alertBody').innerHTML = a.bodyHtml;
+    // "Confirm substitution" only makes sense for an actual off/on change,
+    // not the 2-minute warning and not the full-time alert.
+    const isConfirmableSub = a.phase === 'due' && a.off && a.on;
+    document.getElementById('alertConfirmSubBtn').classList.toggle('hidden', !isConfirmableSub);
+    document.getElementById('alertDismissBtn').textContent = isConfirmableSub ? 'Dismiss without logging' : 'Got it';
+    const note = document.getElementById('alertQueueNote');
+    if(alertQueue.length > 1){
+      note.textContent = `${alertQueue.length - 1} more alert${alertQueue.length - 1 === 1 ? '' : 's'} waiting after this one`;
+      note.classList.remove('hidden');
+    } else note.classList.add('hidden');
+  }
+
+  // ---- Confirm a scheduled substitution actually happening ----
+  function confirmSubFromAlert(){
+    const a = alertQueue[0];
+    if(!a || !liveState || !a.off || !a.on) return;
+    const atMinuteActual = Math.round((getElapsedMs(liveState) / 60000) * 10) / 10;
+    const entry = {idx:a.idx, plannedAt:a.atMinute, atMinuteActual, off:a.off, on:a.on, onPos:a.onPos, reshuffled:a.reshuffled||[], addedAt: Date.now()};
+    const onFieldSet = (liveState.onFieldSet||[]).filter(p => p !== a.off).concat([a.on]);
+    const subsLog = [...(liveState.subsLog||[]), entry];
+    writeLive({...liveState, onFieldSet, subsLog});
+    alertQueue.shift();
+    renderAlertOverlay();
+  }
+  function dismissAlert(){ alertQueue.shift(); renderAlertOverlay(); }
+
+  // ---- Generic player picker modal (used for goal scorer / assist) ----
+  function showPlayerPicker(title, body, players, extraLabel, onPick){
+    document.getElementById('pickerTitle').textContent = title;
+    document.getElementById('pickerBody').textContent = body || '';
+    const list = document.getElementById('pickerList');
+    list.innerHTML = '';
+    players.forEach(name => {
+      const btn = document.createElement('button');
+      btn.textContent = name;
+      btn.onclick = () => { closePlayerPicker(); onPick(name); };
+      list.appendChild(btn);
+    });
+    if(extraLabel){
+      const btn = document.createElement('button');
+      btn.textContent = extraLabel;
+      btn.className = 'secondary-option';
+      btn.onclick = () => { closePlayerPicker(); onPick(null); };
+      list.appendChild(btn);
+    }
+    document.getElementById('playerPickerModal').classList.remove('hidden');
+  }
+  function closePlayerPicker(){ document.getElementById('playerPickerModal').classList.add('hidden'); }
+
+  // ---- Goals ----
+  function fmtReportTime(min){ return Math.round(min) + "'"; }
+
+  function recordGoal(){
+    if(!liveState || !(liveState.onFieldSet||[]).length) return;
+    const atMinute = Math.round((getElapsedMs(liveState) / 60000) * 10) / 10;
+    showPlayerPicker('Who scored?', 'Select the player currently on the pitch who scored.', liveState.onFieldSet, null, (scorer) => {
+      const others = liveState.onFieldSet.filter(p => p !== scorer);
+      showPlayerPicker('Assist?', `${scorer} scored at ${fmtReportTime(atMinute)}. Did anyone assist?`, others, 'No assist', (assist) => {
+        const goal = {atMinute, scorer, assist: assist || null, addedAt: Date.now()};
+        writeLive({...liveState, goals: [...(liveState.goals||[]), goal]});
+      });
+    });
+  }
+  function recordOpponentGoal(){
+    if(!liveState) return;
+    const atMinute = Math.round((getElapsedMs(liveState) / 60000) * 10) / 10;
+    writeLive({...liveState, opponentGoals: [...(liveState.opponentGoals||[]), {atMinute, addedAt: Date.now()}]});
+  }
+
+  // ---- Undo (most recently logged item, across goals / opponent goals / subs) ----
+  function undoLastEvent(){
+    if(!liveState) return;
+    const candidates = [];
+    (liveState.goals||[]).forEach((g,i) => candidates.push({type:'goal', i, addedAt:g.addedAt||0}));
+    (liveState.opponentGoals||[]).forEach((g,i) => candidates.push({type:'oppGoal', i, addedAt:g.addedAt||0}));
+    (liveState.subsLog||[]).forEach((s,i) => candidates.push({type:'sub', i, addedAt:s.addedAt||0}));
+    if(!candidates.length) return;
+    candidates.sort((a,b) => b.addedAt - a.addedAt);
+    const last = candidates[0];
+    showConfirm('Undo the last entry?', 'This removes the most recently logged goal or substitution from the match log.', 'Undo', () => {
+      if(last.type === 'goal'){
+        writeLive({...liveState, goals: liveState.goals.filter((_,i) => i !== last.i)});
+      } else if(last.type === 'oppGoal'){
+        writeLive({...liveState, opponentGoals: liveState.opponentGoals.filter((_,i) => i !== last.i)});
+      } else {
+        const removed = liveState.subsLog[last.i];
+        const onFieldSet = liveState.onFieldSet.filter(p => p !== removed.on).concat([removed.off]);
+        writeLive({...liveState, subsLog: liveState.subsLog.filter((_,i) => i !== last.i), onFieldSet});
+      }
+    });
+  }
+
+  // ---- Match report ----
+  function generateMatchReport(){
+    if(!liveState) return;
+    const report = {
+      matchNum: liveState.matchNum, opponent: liveState.snapshot.opponent, date: liveState.snapshot.fixtureDate,
+      generatedAt: Date.now(), totalMinutes: liveState.snapshot.totalMinutes,
+      startingSeven: liveState.snapshot.startingSeven,
+      goals: [...(liveState.goals||[])].sort((a,b) => a.atMinute - b.atMinute),
+      opponentGoals: [...(liveState.opponentGoals||[])].sort((a,b) => a.atMinute - b.atMinute),
+      subs: [...(liveState.subsLog||[])].sort((a,b) => a.atMinuteActual - b.atMinuteActual)
+    };
+    matchReports = {...matchReports, [report.matchNum]: report};
+    persistReports();
+    renderLiveConsole();
+    showReport(report.matchNum);
+  }
+
+  function renderReportHTML(report){
+    const startersHtml = report.startingSeven.map(p => `
+      <div class="player-row"><div class="name">${p.name}</div><span class="tag">${p.pos ? POSITION_LABEL[p.pos] : '—'}</span></div>
+    `).join('');
+    const goalsHtml = report.goals.length
+      ? `<ul class="event-log">${report.goals.map(g => `<li><span class="icon">⚽</span><span class="time">${fmtReportTime(g.atMinute)}</span><span>${g.scorer}${g.assist ? ` <span class="tag">assist: ${g.assist}</span>` : ''}</span></li>`).join('')}</ul>`
+      : `<div class="note-box">No goals recorded.</div>`;
+    const subsHtml = report.subs.length
+      ? `<ul class="event-log">${report.subs.map(s => `<li><span class="icon">🔁</span><span class="time">${fmtReportTime(s.atMinuteActual)}</span><span>${s.off} OFF → ${s.on} ON (${s.onPos ? POSITION_LABEL[s.onPos] : '—'})${s.reshuffled && s.reshuffled.length ? ` <span class="tag">also: ${s.reshuffled.map(r=>r.player+' → '+POSITION_LABEL[r.newPos]).join(', ')}</span>` : ''}</span></li>`).join('')}</ul>`
+      : `<div class="note-box">No substitutions logged.</div>`;
+    return `
+      <div class="section-title">📋 Match Report <span class="count">Match ${report.matchNum}</span></div>
+      <div class="report-score">${report.goals.length} <span class="opp">– ${report.opponentGoals.length} ${report.opponent}</span></div>
+      <div class="report-meta-line">${report.date} · ${report.totalMinutes} minutes played</div>
+      <div class="section-title">Starting 7</div>
+      ${startersHtml}
+      <div class="section-title">Goals</div>
+      ${goalsHtml}
+      <div class="section-title">Substitutions</div>
+      ${subsHtml}
+      <div class="console-actions"><button class="console-btn ghost-btn" id="closeReportBtn">Close report</button></div>
+    `;
+  }
+
+  function showReport(matchNum){
+    const report = matchReports[matchNum];
+    const card = document.getElementById('reportCard');
+    if(!report){ card.classList.add('hidden'); return; }
+    card.innerHTML = renderReportHTML(report);
+    card.classList.remove('hidden');
+    const closeBtn = document.getElementById('closeReportBtn');
+    if(closeBtn) closeBtn.onclick = () => card.classList.add('hidden');
+    card.scrollIntoView({behavior:'smooth', block:'start'});
+  }
+
+  // ---- Live console: goal/sub log + report trigger, shown whenever a live session exists ----
+  function renderLiveConsole(){
+    const card = document.getElementById('liveConsoleCard');
+    if(!liveState){ card.classList.add('hidden'); return; }
+    card.classList.remove('hidden');
+    const goals = liveState.goals || [], oppGoals = liveState.opponentGoals || [], subs = liveState.subsLog || [];
+    const combinedLog = [
+      ...goals.map(g => ({t:g.atMinute, html:`<span class="icon">⚽</span><span class="time">${fmtReportTime(g.atMinute)}</span><span>${g.scorer}${g.assist?` <span class="tag">assist: ${g.assist}</span>`:''}</span>`})),
+      ...oppGoals.map(g => ({t:g.atMinute, html:`<span class="icon">🥅</span><span class="time">${fmtReportTime(g.atMinute)}</span><span>${liveState.snapshot.opponent} goal</span>`})),
+      ...subs.map(s => ({t:s.atMinuteActual, html:`<span class="icon">🔁</span><span class="time">${fmtReportTime(s.atMinuteActual)}</span><span>${s.off} OFF → ${s.on} ON (${s.onPos?POSITION_LABEL[s.onPos]:'—'})</span>`}))
+    ].sort((a,b) => a.t - b.t);
+    const ended = liveState.status === 'ended';
+    const hasReport = !!matchReports[liveState.matchNum];
+
+    card.innerHTML = `
+      <div class="section-title">Live Match <span class="count">Match ${liveState.matchNum} vs ${liveState.snapshot.opponent}</span></div>
+      <div class="score-strip">${goals.length} <span class="vs">us</span> — ${oppGoals.length} <span class="vs">${liveState.snapshot.opponent}</span></div>
+      <div class="console-actions">
+        <button class="console-btn goal" id="goalBtn" ${ended?'disabled':''}>⚽ Goal</button>
+        <button class="console-btn opp-goal" id="oppGoalBtn" ${ended?'disabled':''}>🥅 Opponent goal</button>
+        <button class="console-btn ghost-btn" id="undoBtn">↩ Undo last entry</button>
+        ${ended ? (hasReport ? `<button class="console-btn report" id="viewReportBtn">📋 View match report</button>` : `<button class="console-btn report" id="genReportBtn">📋 Generate match report</button>`) : ''}
+      </div>
+      ${combinedLog.length ? `<ul class="event-log">${combinedLog.map(e => `<li>${e.html}</li>`).join('')}</ul>` : `<div class="note-box">No goals or substitutions logged yet.</div>`}
+    `;
+    const wire = (id, fn) => { const el = document.getElementById(id); if(el) el.onclick = fn; };
+    wire('goalBtn', recordGoal);
+    wire('oppGoalBtn', recordOpponentGoal);
+    wire('undoBtn', undoLastEvent);
+    wire('genReportBtn', generateMatchReport);
+    wire('viewReportBtn', () => showReport(liveState.matchNum));
+  }
+
+  // ---- Live bar display + tick loop ----
+  function updateLiveBarDisplay(){
+    const bar = document.getElementById('liveBar');
+    if(!liveState || liveState.status === 'ended'){ bar.classList.add('hidden'); return; }
+    bar.classList.remove('hidden');
+    bar.classList.toggle('paused', liveState.status === 'paused');
+    document.getElementById('liveMatchNum').textContent = liveState.matchNum;
+    document.getElementById('liveOpponent').textContent = liveState.snapshot.opponent;
+    document.getElementById('liveScoreUs').textContent = (liveState.goals || []).length;
+    document.getElementById('liveScoreThem').textContent = (liveState.opponentGoals || []).length;
+    document.getElementById('liveScoreOppName').textContent = liveState.snapshot.opponent;
+    const elapsedMs = getElapsedMs(liveState);
+    const remainMs = Math.max(0, liveState.snapshot.totalMinutes * 60000 - elapsedMs);
+    document.getElementById('liveElapsed').textContent = fmtClock(elapsedMs);
+    document.getElementById('liveRemaining').textContent = fmtClock(remainMs);
+    document.getElementById('livePauseBtn').classList.toggle('hidden', liveState.status !== 'running');
+    document.getElementById('liveResumeBtn').classList.toggle('hidden', liveState.status !== 'paused');
+  }
+
+  function tickLive(){
+    if(!liveState){ updateLiveBarDisplay(); return; }
+    const key = liveState.matchNum + ':' + liveState.kickoffAt;
+    if(key !== lastLiveKey){ shownAlertKeys = new Set(); alertQueue = []; renderAlertOverlay(); lastLiveKey = key; }
+
+    updateLiveBarDisplay();
+
+    if(liveState.status === 'running'){
+      const elapsedMin = getElapsedMs(liveState) / 60000;
+      liveState.snapshot.events.forEach((ev, idx) => {
+        const warnKey = 'w' + idx, dueKey = 'd' + idx;
+        if(elapsedMin >= ev.atMinute - 2 && !shownAlertKeys.has(warnKey)){
+          shownAlertKeys.add(warnKey);
+          const c = buildAlertContent(ev, 'warn');
+          pushAlert({phase:'warn', atMinute: ev.atMinute, title:c.title, bodyHtml:c.bodyHtml});
+        }
+        if(elapsedMin >= ev.atMinute && !shownAlertKeys.has(dueKey)){
+          shownAlertKeys.add(dueKey);
+          const c = buildAlertContent(ev, 'due');
+          pushAlert({phase:'due', atMinute: ev.atMinute, idx, off:ev.off, on:ev.on, onPos:ev.onPos,
+            reshuffled: ev.reshuffled, title:c.title, bodyHtml:c.bodyHtml});
+        }
+      });
+      if(elapsedMin >= liveState.snapshot.totalMinutes && !shownAlertKeys.has('fulltime')){
+        shownAlertKeys.add('fulltime');
+        pushAlert({phase:'due', atMinute: liveState.snapshot.totalMinutes, title:'Full time!',
+          bodyHtml:`${liveState.snapshot.totalMinutes} minutes played — the match is complete. Head down to the Live Match panel to generate the report.`});
+        writeLive({...liveState, status:'ended', endedAt: Date.now()});
+      }
+    }
+  }
+
+  function initLiveTimer(){
+    document.getElementById('alertDismissBtn').onclick = dismissAlert;
+    document.getElementById('alertConfirmSubBtn').onclick = confirmSubFromAlert;
+    document.getElementById('pickerCancelBtn').onclick = closePlayerPicker;
+    document.getElementById('livePauseBtn').onclick = () => pauseLive();
+    document.getElementById('liveResumeBtn').onclick = () => requestResumeLive();
+    document.getElementById('liveEndBtn').onclick = () => endLive();
+    updateLiveBarDisplay();
+    renderLiveConsole();
+    setInterval(tickLive, 500);
+  }
+
+/* =========================================================================
+   6. THEME
+   ========================================================================= */
+  function initTheme(){
+    const saved = localStorage.getItem('jakd63-theme');
+    const theme = saved || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    document.documentElement.setAttribute('data-theme', theme);
+    document.getElementById('themeToggle').addEventListener('click', () => {
+      const cur = document.documentElement.getAttribute('data-theme');
+      const next = cur === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('jakd63-theme', next);
+    });
+  }
+
+/* =========================================================================
+   7. RENDER
+   ========================================================================= */
+  function fmtMin(m){
+    const r = Math.round(m*2)/2;
+    return (r % 1 === 0) ? String(r) : r.toFixed(1);
+  }
+
+  function renderMatchStrip(season){
+    const strip = document.getElementById('matchStrip');
+    strip.innerHTML = '';
+    season.results.forEach(r => {
+      const chip = document.createElement('div');
+      chip.className = 'match-chip' + (r.fixture.n === currentMatch ? ' active' : '');
+      chip.innerHTML = `<b>M${r.fixture.n}${r.warning ? '<span class="warn-dot"></span>' : ''}</b>${r.fixture.opp}`;
+      chip.onclick = () => { currentMatch = r.fixture.n; renderAll(); };
+      strip.appendChild(chip);
+    });
+    const activeChip = strip.children[currentMatch-1];
+    if(activeChip) activeChip.scrollIntoView({inline:'center', block:'nearest'});
+  }
+
+  function renderFixtureCard(match){
+    const el = document.getElementById('fixtureCard');
+    el.innerHTML = `
+      <div class="fixture-head">
+        <div>
+          <h2>Match ${match.fixture.n} · vs ${match.fixture.opp}</h2>
+          <div class="fixture-meta">
+            ${match.fixture.date} — kick off ${match.fixture.time}<br>
+            ${match.fixture.loc}
+          </div>
+        </div>
+        <div class="fixture-badge">${MATCH_MINUTES} min · ${HALF_MINUTES}+${HALF_MINUTES}</div>
+      </div>
+      ${match.fixture.dateFlag ? `<div class="note-box">The year on this fixture reads ${match.fixture.date.split(' ').pop()} in the list you supplied — worth double-checking against the league fixture list, since the 2026/27 season runs into 2027.</div>` : ''}
+      ${match.warning ? `<div class="warning-box">⚠ ${match.warning}</div>` : ''}
+      ${match.gkNote ? `<div class="note-box">🧤 ${match.gkNote}</div>` : ''}
+      ${match.fixed ? `<div class="lock-note">🔒 Match 1 roster is locked as set by the coach — rotation for the fairness engine starts from Match 2.</div>` : ''}
+      <div id="kickoffArea"></div>
+    `;
+    renderKickoffArea(match);
+  }
+
+  function renderKickoffArea(match){
+    const area = document.getElementById('kickoffArea');
+    if(!area) return;
+    const live = liveState;
+    let html = '';
+    if(live && live.matchNum === match.fixture.n && live.status === 'ended'){
+      html += `<div class="live-status-line">🏁 This match has ended — see the Live Match panel below for goals, subs and the report.
+        <button class="small-link-btn" id="resetLiveBtn">Reset &amp; start over</button></div>`;
+    } else if(live && live.matchNum === match.fixture.n){
+      html += `<div class="live-status-line">🟢 This match's timer is live — see the bar at the top of the screen.
+        <button class="small-link-btn" id="resetLiveBtn">Reset timer</button></div>`;
+    } else if(live && live.matchNum !== match.fixture.n && live.status !== 'ended'){
+      html += `<div class="live-status-line">⚠ Match ${live.matchNum} is currently live — end that timer before starting this one.</div>`;
+    } else {
+      if(live && live.status === 'ended' && !matchReports[live.matchNum]){
+        html += `<div class="note-box">Heads up: Match ${live.matchNum}'s log hasn't been turned into a report yet — generate it from the Live Match panel before starting this one, or it'll be overwritten.</div>`;
+      }
+      html += `<button class="kickoff-btn" id="kickoffBtn">⚽ Kick off</button>`;
+    }
+    if(matchReports[match.fixture.n]){
+      html += `<div class="live-status-line">📋 A match report is saved for this fixture.
+        <button class="small-link-btn" id="viewStoredReportBtn" style="color:var(--pitch-light);">View report</button></div>`;
+    }
+    area.innerHTML = html;
+    const resetBtn = document.getElementById('resetLiveBtn');
+    if(resetBtn) resetBtn.onclick = () => showConfirm(
+      'Reset the match timer?',
+      `This clears the clock for Match ${match.fixture.n} and every goal/substitution logged so far. Only do this if kickoff was started by mistake, or you want to run the clock again.`,
+      'Reset timer',
+      () => clearLive()
+    );
+    const kickoffBtn = document.getElementById('kickoffBtn');
+    if(kickoffBtn) kickoffBtn.onclick = () => startKickoff(match.fixture.n);
+    const viewStoredBtn = document.getElementById('viewStoredReportBtn');
+    if(viewStoredBtn) viewStoredBtn.onclick = () => showReport(match.fixture.n);
+  }
+
+  function playerRow(name, match, opts){
+    const isUnavailable = match.unavailable && match.unavailable.includes(name);
+    const canToggle = !match.fixed;
+    return `
+      <div class="player-row ${isUnavailable ? 'unavailable' : ''}">
+        <div class="name">${name} ${opts.tag ? `<span class="tag">${opts.tag}</span>` : ''}</div>
+        <button class="avail-btn ${isUnavailable ? 'out' : ''}" ${canToggle ? '' : 'disabled'}
+          onclick="window.__toggleAvail(${match.fixture.n}, '${name}')">
+          ${isUnavailable ? 'Unavailable' : 'Mark unavailable'}
+        </button>
+      </div>`;
+  }
+
+  function renderSquadCard(match, positions){
+    const el = document.getElementById('squadCard');
+    let html = '';
+    if(positions.warnings.length){
+      positions.warnings.forEach(w => html += `<div class="warning-box">⚠ ${w}</div>`);
+    }
+    html += `<div class="section-title">Starting 7 <span class="count">on pitch at KO</span></div>`;
+    match.schedule.onFieldAtStart.forEach(n => {
+      const pos = positions.kickoffAssignment && Object.entries(positions.kickoffAssignment).find(([,pl]) => pl === n);
+      const tag = pos ? POSITION_LABEL[pos[0]] : 'position unassigned';
+      html += playerRow(n, match, {tag});
+    });
+
+    html += `<div class="section-title">Bench <span class="count">${match.schedule.benchAtStart.length} substitute${match.schedule.benchAtStart.length===1?'':'s'}</span></div>`;
+    match.schedule.benchAtStart.forEach(n => html += playerRow(n, match, {tag:'sub · plays ' + eligiblePositionsFor(n).map(p=>p).join('/')}));
+
+    const restedList = match.fixed ? match.rested : [...match.rested];
+    html += `<div class="section-title">Not in this matchday squad <span class="count">${restedList.length + (match.unavailable?match.unavailable.length:0)}</span></div>`;
+    if(restedList.length === 0 && (!match.unavailable || match.unavailable.length===0)){
+      html += `<div class="note-box">Everyone is in the squad this week.</div>`;
+    }
+    restedList.forEach(n => html += playerRow(n, match, {tag:'resting — fairness rotation'}));
+    if(match.unavailable) match.unavailable.forEach(n => html += playerRow(n, match, {tag:'marked unavailable'}));
+
+    el.innerHTML = html;
+  }
+
+  function renderTimelineCard(match, positions){
+    const el = document.getElementById('timelineCard');
+    let html = `<div class="section-title">Substitution plan <span class="count">${match.schedule.events.length} change${match.schedule.events.length===1?'':'s'}</span></div>`;
+    const outfieldMinuteVals = [...new Set(Object.entries(match.schedule.minutesByPlayer).filter(([p])=>p!==match.schedule.pinnedGK).map(([,v])=>v))];
+    const minutesLine = match.schedule.pinnedGK
+      ? `${match.schedule.pinnedGK} plays the full ${MATCH_MINUTES} min in goal; the other ${outfieldMinuteVals.length ? Object.keys(match.schedule.minutesByPlayer).length-1 : 0} outfield players share <b>${fmtMin(outfieldMinuteVals[0]||0)} min</b> each.`
+      : `Every rostered player gets <b>${fmtMin(outfieldMinuteVals[0]||0)} min</b> out of the ${MATCH_MINUTES}-minute match.`;
+    html += `<div class="note-box">${minutesLine} Incoming players slot into the position they're replacing wherever their eligibility allows; occasionally two or three players rotate positions at once to keep everyone in a role they can actually play.</div>`;
+    if(match.schedule.events.length === 0){
+      html += `<div class="note-box" style="margin-top:8px;">No changes needed — exactly 7 players available, so the same 7 play the full match.</div>`;
+    } else {
+      html += `<ul class="sub-timeline">`;
+      positions.events.forEach(ev => {
+        const posLabel = ev.onPos ? POSITION_LABEL[ev.onPos] : 'no valid slot';
+        html += `<li>
+          <span class="time">${ev.atMinute}'</span>
+          <span>
+            <span class="arrow-on">↑ ${ev.on} ON</span> → <b>${posLabel}</b>, for
+            <span class="arrow-off">${ev.off} OFF ↓</span>${ev.isHalftime ? ' <span class="tag">at half-time</span>' : ''}
+            ${ev.reshuffled && ev.reshuffled.length ? `<br><span class="tag">also moves: ${ev.reshuffled.map(r=>`${r.player} → ${POSITION_LABEL[r.newPos]}`).join(', ')}</span>` : ''}
+            ${!ev.feasible ? `<br><span class="tag" style="color:var(--red)">⚠ no eligible slot — manual swap needed</span>` : ''}
+          </span>
+        </li>`;
+      });
+      html += `</ul>`;
+    }
+    el.innerHTML = html;
+  }
+
+  function renderSeasonCard(season){
+    const el = document.getElementById('seasonCard');
+    const rows = PLAYERS.map(p => ({name:p, ...season.finalState[p]}))
+      .sort((a,b) => b.minutes - a.minutes);
+    const maxMin = Math.max(...rows.map(r=>r.minutes), 1);
+    let html = `<div class="section-title">Season fairness check <span class="count">after all 25 fixtures</span></div>`;
+    html += `<table class="season"><thead><tr><th>Player</th><th>Matches</th><th>Minutes</th></tr></thead><tbody>`;
+    rows.forEach(r => {
+      const pct = Math.round((r.minutes/maxMin)*100);
+      html += `<tr>
+        <td>${r.name}</td>
+        <td class="num">${r.rostered}/25</td>
+        <td class="num"><span class="bar-wrap"><span class="bar-fill" style="width:${pct}%"></span></span>${fmtMin(r.minutes)}</td>
+      </tr>`;
+    });
+    html += `</tbody></table>
+      <div class="note-box" style="margin-top:10px;">
+        With 13 players and 10 matchday slots (7 + 3 subs), no one can literally play <i>every other</i> match while still
+        keeping season minutes equal — that would need exactly half the squad rostered each week. Instead this engine always
+        rosters whoever has played the least so far, which converges on equal minutes for everyone across the season and
+        automatically prioritises anyone coming back from an "unavailable" match. Typically each player rests roughly 1
+        week in 4–5, not 1 in 2.
+      </div>
+      <div class="note-box" style="margin-top:8px;">
+        🧤 Bert and Callum will show noticeably more minutes than everyone else here, by design — the goalkeeper policy
+        guarantees one of them is always in the squad and plays the full match unsubstituted, alternating between the
+        two of them. That extra game time doesn't get evened out against the outfield players; it's a deliberate trade-off
+        for always having a trained keeper. If you'd rather it balanced out too, the fix is training a third keeper.
+      </div>`;
+    el.innerHTML = html;
+  }
+
+  function renderAll(){
+    const season = computeSeason(unavailability);
+    document.getElementById('halfLenNote').textContent = `${HALF_MINUTES} minutes each half (${MATCH_MINUTES} minutes total)`;
+    renderMatchStrip(season);
+    const match = season.results.find(r => r.fixture.n === currentMatch) || season.results[0];
+    const positions = computeMatchPositions(match);
+    renderFixtureCard(match);
+    renderSquadCard(match, positions);
+    renderTimelineCard(match, positions);
+    renderSeasonCard(season);
+    renderLiveConsole();
+  }
+
+  window.__toggleAvail = toggleAvailability;
+
+  initTheme();
+  initLiveTimer();
+  initFirebase();
+</script>
+</body>
+</html>
