@@ -417,8 +417,7 @@
       <div class="live-score-label">us <span id="liveScoreOppName"></span></div>
     </div>
     <div class="live-controls">
-      <button id="livePauseBtn">⏸ Pause</button>
-      <button id="liveResumeBtn" class="primary hidden">▶ Resume</button>
+      <button id="liveMainBtn">⏸ Pause</button>
       <button id="liveEndBtn" class="ghost">End</button>
     </div>
   </div>
@@ -637,12 +636,34 @@
     }
 
     const remaining = totalMinutes - startT;
-    // Track minutes/caps at a fine grain internally (so a cap is caught at
-    // the right moment), but only trigger an ORDINARY fairness swap once
-    // the imbalance passes a much coarser threshold — otherwise it would
-    // rebalance on every tiny tick and produce dozens of unusable subs.
+    // Ordinary rebalancing only happens at a few fixed checkpoints (the
+    // midpoint of each half, plus half-time itself) where as many players
+    // as needed swap together in one stoppage — this is what keeps the
+    // number of separate substitution moments per half as low as possible.
+    // Cap-forced swaps (Ted/Zachary) still happen immediately whenever
+    // required, and piggyback a full rebalance onto that same stoppage
+    // rather than leaving a separate one for later.
     const checkStep = 0.25;
-    const fairnessThreshold = (totalMinutes / R) * 1.8;
+    const half = totalMinutes / 2;
+    const checkpoints = [half/2, half, half + half/2]
+      .filter(cp => cp > startT + 1e-6 && cp < totalMinutes - 1e-6);
+    let cpIdx = 0;
+
+    function batchRebalance(t, isHalftime){
+      let guard2 = 0;
+      while(guard2++ < 20){
+        const bench = rosterOrdered.filter(p => !onField.has(p));
+        if(bench.length === 0) break;
+        const worstOn = [...onField].sort((a,b) => minutes[b]-minutes[a])[0];
+        const bestBench = [...bench].sort((a,b) => minutes[a]-minutes[b])[0];
+        if(minutes[worstOn] - minutes[bestBench] > checkStep + 1e-6){
+          onField.delete(worstOn); onField.add(bestBench);
+          continuousStart[bestBench] = t;
+          events.push({atMinute: t, off: worstOn, on: bestBench, isHalftime});
+        } else break;
+      }
+    }
+
     let t = startT, guard = 0;
     while(t < totalMinutes - 1e-6 && guard < 4000){
       guard++;
@@ -650,31 +671,28 @@
       t = Math.round((t + dt) * 100) / 100;
       onField.forEach(p => { minutes[p] += dt; });
 
-      let forcedOff = null;
-      onField.forEach(p => {
-        const cap = STINT_CAP_MINUTES[p];
-        if(cap && !forcedOff && (t - continuousStart[p]) >= cap - 1e-6) forcedOff = p;
-      });
-
-      const bench = rosterOrdered.filter(p => !onField.has(p));
-      if(bench.length === 0) continue;
-
-      let offPlayer = null, onPlayer = null;
-      if(forcedOff){
-        offPlayer = forcedOff;
-        onPlayer = [...bench].sort((a,b) => minutes[a]-minutes[b])[0];
-      } else {
-        const worstOn = [...onField].sort((a,b) => minutes[b]-minutes[a])[0];
-        const bestBench = [...bench].sort((a,b) => minutes[a]-minutes[b])[0];
-        if(minutes[worstOn] - minutes[bestBench] > fairnessThreshold){
-          offPlayer = worstOn; onPlayer = bestBench;
-        }
-      }
-      if(offPlayer && onPlayer && offPlayer !== onPlayer){
-        onField.delete(offPlayer); onField.add(onPlayer);
+      let anyForced = false, forcedGuard = 0;
+      while(forcedGuard++ < 10){
+        let forcedOff = null;
+        onField.forEach(p => {
+          const cap = STINT_CAP_MINUTES[p];
+          if(cap && !forcedOff && (t - continuousStart[p]) >= cap - 1e-6) forcedOff = p;
+        });
+        if(!forcedOff) break;
+        const bench = rosterOrdered.filter(p => !onField.has(p));
+        if(bench.length === 0) break;
+        const onPlayer = [...bench].sort((a,b) => minutes[a]-minutes[b])[0];
+        onField.delete(forcedOff); onField.add(onPlayer);
         continuousStart[onPlayer] = t;
-        const isHalftime = Math.abs(t - totalMinutes/2) < (checkStep/2 + 0.05);
-        events.push({atMinute: t, off: offPlayer, on: onPlayer, isHalftime});
+        events.push({atMinute: t, off: forcedOff, on: onPlayer, isHalftime:false});
+        anyForced = true;
+      }
+      if(anyForced) batchRebalance(t, false);
+
+      if(cpIdx < checkpoints.length && t >= checkpoints[cpIdx] - 1e-6){
+        const isHalftime = Math.abs(checkpoints[cpIdx] - half) < 1e-6;
+        batchRebalance(t, isHalftime);
+        cpIdx++;
       }
     }
 
@@ -864,13 +882,18 @@
   }
 
   const TRAINED_KEEPERS = ["Bert","Callum"];
+  const PRIMARY_KEEPER = "Callum";
   const EMERGENCY_KEEPERS = ["Zachary","Elliott"];
 
-  // Goalkeeper policy: Bert/Callum are the only trained keepers, so one of
-  // them plays every match they're available for, alternating between the
-  // two by whoever has kept goal fewer times so far. Zachary/Elliott are
-  // emergency-only cover, used solely when BOTH Bert and Callum are out.
+  // Goalkeeper policy: Callum keeps goal every match he's available for.
+  // Bert (also trained) only steps in on the rare week Callum's out, and
+  // otherwise rotates as a normal outfield player like everyone else.
+  // Zachary/Elliott are emergency-only cover, used solely when BOTH Bert
+  // and Callum are unavailable.
   function pickGoalkeeper(available, state){
+    if(available.includes(PRIMARY_KEEPER)) return {gk: PRIMARY_KEEPER, tier:'trained'};
+    const otherTrained = TRAINED_KEEPERS.filter(p => p !== PRIMARY_KEEPER && available.includes(p));
+    if(otherTrained.length) return {gk: otherTrained[0], tier:'trained'};
     const bestOf = (pool) => [...pool].sort((a,b) => {
       const d = (state[a].gkAppearances||0) - (state[b].gkAppearances||0);
       if(d !== 0) return d;
@@ -878,8 +901,6 @@
       if(d2 !== 0) return d2;
       return a.localeCompare(b);
     })[0];
-    const trained = available.filter(p => TRAINED_KEEPERS.includes(p));
-    if(trained.length) return {gk: bestOf(trained), tier:'trained'};
     const emergency = available.filter(p => EMERGENCY_KEEPERS.includes(p));
     if(emergency.length) return {gk: bestOf(emergency), tier:'emergency'};
     return {gk: null, tier:'none'};
@@ -930,7 +951,7 @@
 
     // --- Match 1: personnel fixed by the coach, and the coach wants Callum in goal ---
     const m1full = [...MATCH1_STARTERS, ...MATCH1_SUBS];
-    const m1GK = "Callum"; // explicit coach instruction — Callum keeps for Match 1
+    const m1GK = "Callum"; // Callum is the permanent goalkeeper
     const m1Outfield = m1full.filter(p => p !== m1GK);
     const m1Preferred = MATCH1_STARTERS.filter(p => p !== m1GK); // keeps the coach's original starters as outfield starters
     const m1Built = buildPinnedSquad(m1GK, m1Outfield, m1Preferred);
@@ -956,8 +977,10 @@
         gkNote = `None of the keeper-capable players (Bert, Callum, Zachary, Elliott) are available this week — the team has no goalkeeper cover. Consider moving the fixture or sourcing cover.`;
       } else if(gkPick.tier === 'emergency'){
         gkNote = `Neither Bert nor Callum is available this week, so ${pinnedGK} covers in goal as emergency keeper (Elliott/Zachary are only used in goal when both trained keepers are out).`;
+      } else if(pinnedGK === PRIMARY_KEEPER){
+        gkNote = `${pinnedGK} plays the full match in goal and won't be rotated off.`;
       } else {
-        gkNote = `${pinnedGK} plays the full match in goal and won't be rotated off, alternating with ${TRAINED_KEEPERS.find(k=>k!==pinnedGK)} match to match.`;
+        gkNote = `${pinnedGK} covers in goal this week since Callum is unavailable, and plays the full match without being rotated off.`;
       }
 
       // The pinned keeper is guaranteed a place regardless of the usual
@@ -1167,16 +1190,28 @@
           liveState = data.live || null;
           matchReports = data.reports || {};
           lastBackup = data.backup || null;
-        } else {
+          renderAll();
+          updateLiveBarDisplay();
+          updateBackupUI();
+        } else if(!snap.metadata.fromCache){
+          // Only create a fresh document once the SERVER has actually
+          // confirmed it's missing. A snapshot served straight from an
+          // empty local cache (e.g. a device/browser that hasn't fully
+          // synced yet) can briefly report "doesn't exist" even when real
+          // data is sitting on the server — blindly trusting that and
+          // writing a blank document over it is what wiped a saved match
+          // report once already, so this now waits for server confirmation.
           unavailability = {};
           liveState = null;
           matchReports = {};
           lastBackup = null;
           ref.set({unavailability:{}, live:null, reports:{}, backup:null}, {merge:true});
+          renderAll();
+          updateLiveBarDisplay();
+          updateBackupUI();
         }
-        renderAll();
-        updateLiveBarDisplay();
-        updateBackupUI();
+        // else: cache says it's missing but the server hasn't weighed in
+        // yet — do nothing and wait for the next, authoritative snapshot.
       }, (err) => {
         console.error('Firestore sync error, falling back to local mode:', err);
         useFirestore = false;
@@ -1293,19 +1328,26 @@
       subsLog: [], goals: [], opponentGoals: []
     });
   }
-  function pauseLive(){
+  function pauseLive(isHalftime){
     if(!liveState || liveState.status !== 'running') return;
-    writeLive({...liveState, status:'paused', pausedAt: Date.now()});
+    writeLive({
+      ...liveState, status:'paused', pausedAt: Date.now(),
+      pausedForHalftime: !!isHalftime,
+      halftimeTaken: liveState.halftimeTaken || !!isHalftime
+    });
   }
   function requestResumeLive(){
     if(!liveState || liveState.status !== 'paused') return;
+    const isHalftime = !!liveState.pausedForHalftime;
     showConfirm(
-      'Resume the match?',
-      `This restarts the clock for Match ${liveState.matchNum} vs ${liveState.snapshot.opponent}. Only confirm once your players are ready to go again — this is the safeguard in case Resume gets tapped by accident.`,
-      'Yes, resume',
+      isHalftime ? 'Start the second half?' : 'Resume the match?',
+      isHalftime
+        ? `This restarts the clock for the second half of Match ${liveState.matchNum} vs ${liveState.snapshot.opponent}. Only confirm once your players are back out and ready — this is the safeguard in case it gets tapped by accident.`
+        : `This restarts the clock for Match ${liveState.matchNum} vs ${liveState.snapshot.opponent}. Only confirm once your players are ready to go again — this is the safeguard in case Resume gets tapped by accident.`,
+      isHalftime ? 'Yes, kick off second half' : 'Yes, resume',
       () => {
         const now = Date.now();
-        writeLive({...liveState, status:'running', totalPausedMs: liveState.totalPausedMs + (now - liveState.pausedAt), pausedAt:null});
+        writeLive({...liveState, status:'running', totalPausedMs: liveState.totalPausedMs + (now - liveState.pausedAt), pausedAt:null, pausedForHalftime:false});
       }
     );
   }
@@ -1639,8 +1681,8 @@
 
   function buildReportTimeline(report){
     const items = [
-      ...report.goals.map(g => ({t:g.atMinute, order:0, html:`<span class="icon">⚽</span><span class="time">${fmtReportTime(g.atMinute)}</span><span><b>Goal</b> — ${g.scorer}${g.assist ? ` <span class="tag">assist: ${g.assist}</span>` : ''}</span>`})),
-      ...report.opponentGoals.map(g => ({t:g.atMinute, order:0, html:`<span class="icon">🥅</span><span class="time">${fmtReportTime(g.atMinute)}</span><span><b>Goal</b> — ${report.opponent}</span>`})),
+      ...report.goals.map(g => ({t:g.atMinute, order:0, html:`<span class="icon">⚽</span><span class="time">${fmtReportTime(g.atMinute)}</span><span>Goal: <b>${g.scorer}</b>${g.assist ? `, Assist: <b>${g.assist}</b>` : ''}</span>`})),
+      ...report.opponentGoals.map(g => ({t:g.atMinute, order:0, html:`<span class="icon">🥅</span><span class="time">${fmtReportTime(g.atMinute)}</span><span>Goal: <b>${report.opponent}</b></span>`})),
       ...report.subs.map(s => ({t:s.atMinuteActual, order:1, html:`<span class="icon">🔁</span><span class="time">${fmtReportTime(s.atMinuteActual)}</span><span><b>Substitution</b> — ${s.off} OFF → ${s.on} ON (${s.onPos ? POSITION_LABEL[s.onPos] : '—'})${s.manual ? ` <span class="tag">manual</span>` : ''}${s.early ? ` <span class="tag">made early</span>` : ''}${s.reshuffled && s.reshuffled.length ? `<br><span class="tag">also: ${s.reshuffled.map(r=>r.player+' → '+POSITION_LABEL[r.newPos]).join(', ')}</span>` : ''}</span>`}))
     ];
     items.sort((a,b) => a.t - b.t || a.order - b.order);
@@ -1688,7 +1730,7 @@
     card.classList.remove('hidden');
     const goals = liveState.goals || [], oppGoals = liveState.opponentGoals || [], subs = liveState.subsLog || [];
     const combinedLog = [
-      ...goals.map(g => ({t:g.atMinute, html:`<span class="icon">⚽</span><span class="time">${fmtReportTime(g.atMinute)}</span><span>${g.scorer}${g.assist?` <span class="tag">assist: ${g.assist}</span>`:''}</span>`})),
+      ...goals.map(g => ({t:g.atMinute, html:`<span class="icon">⚽</span><span class="time">${fmtReportTime(g.atMinute)}</span><span>Goal: <b>${g.scorer}</b>${g.assist?`, Assist: <b>${g.assist}</b>`:''}</span>`})),
       ...oppGoals.map(g => ({t:g.atMinute, html:`<span class="icon">🥅</span><span class="time">${fmtReportTime(g.atMinute)}</span><span>${liveState.snapshot.opponent} goal</span>`})),
       ...subs.map(s => ({t:s.atMinuteActual, html:`<span class="icon">🔁</span><span class="time">${fmtReportTime(s.atMinuteActual)}</span><span>${s.off} OFF → ${s.on} ON (${s.onPos?POSITION_LABEL[s.onPos]:'—'})${s.manual?' <span class="tag">manual</span>':''}${s.early?' <span class="tag">made early</span>':''}</span>`}))
     ].sort((a,b) => a.t - b.t);
@@ -1730,8 +1772,27 @@
     const remainMs = Math.max(0, liveState.snapshot.totalMinutes * 60000 - elapsedMs);
     document.getElementById('liveElapsed').textContent = fmtClock(elapsedMs);
     document.getElementById('liveRemaining').textContent = fmtClock(remainMs);
-    document.getElementById('livePauseBtn').classList.toggle('hidden', liveState.status !== 'running');
-    document.getElementById('liveResumeBtn').classList.toggle('hidden', liveState.status !== 'paused');
+
+    const mainBtn = document.getElementById('liveMainBtn');
+    const elapsedMin = elapsedMs / 60000;
+    const half = liveState.snapshot.totalMinutes / 2;
+    mainBtn.classList.remove('primary');
+    if(liveState.status === 'running'){
+      if(elapsedMin >= liveState.snapshot.totalMinutes - 0.01){
+        mainBtn.textContent = '🏁 End Match';
+        mainBtn.onclick = () => endLive();
+      } else if(elapsedMin >= half - 0.01 && !liveState.halftimeTaken){
+        mainBtn.textContent = '🕐 Half-Time';
+        mainBtn.onclick = () => pauseLive(true);
+      } else {
+        mainBtn.textContent = '⏸ Pause';
+        mainBtn.onclick = () => pauseLive(false);
+      }
+    } else if(liveState.status === 'paused'){
+      mainBtn.classList.add('primary');
+      mainBtn.textContent = liveState.pausedForHalftime ? '▶ Kick-Off Second Half' : '▶ Resume';
+      mainBtn.onclick = () => requestResumeLive();
+    }
   }
 
   function tickLive(){
@@ -1760,8 +1821,7 @@
       if(elapsedMin >= liveState.snapshot.totalMinutes && !shownAlertKeys.has('fulltime')){
         shownAlertKeys.add('fulltime');
         pushAlert({phase:'due', atMinute: liveState.snapshot.totalMinutes, title:'Full time!',
-          bodyHtml:`${liveState.snapshot.totalMinutes} minutes played — the match is complete. Head down to the Live Match panel to generate the report.`});
-        writeLive({...liveState, status:'ended', endedAt: Date.now()});
+          bodyHtml:`${liveState.snapshot.totalMinutes} minutes played. Tap <b>End Match</b> in the bar at the top when you're ready to generate the report.`});
       }
     }
   }
@@ -1770,8 +1830,8 @@
     document.getElementById('alertDismissBtn').onclick = dismissAlert;
     document.getElementById('alertConfirmSubBtn').onclick = confirmSubFromAlert;
     document.getElementById('pickerCancelBtn').onclick = closePlayerPicker;
-    document.getElementById('livePauseBtn').onclick = () => pauseLive();
-    document.getElementById('liveResumeBtn').onclick = () => requestResumeLive();
+    // liveMainBtn's onclick is (re)assigned dynamically in updateLiveBarDisplay
+    // since it changes behaviour through the match (Pause / Half-Time / Kick-Off Second Half / End Match).
     document.getElementById('liveEndBtn').onclick = () => endLive();
     document.getElementById('saveBackupBtn').onclick = saveBackup;
     document.getElementById('restoreBackupBtn').onclick = restoreBackup;
