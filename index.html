@@ -73,6 +73,7 @@
     position:absolute; right:-40px; top:-60px;
     width:220px; height:220px; border-radius:50%;
     background:radial-gradient(circle, rgba(255,255,255,.09), transparent 70%);
+    pointer-events:none;
   }
   .top-row{display:flex; align-items:center; justify-content:space-between; gap:12px;}
   .brand{display:flex; flex-direction:column; gap:2px;}
@@ -102,9 +103,31 @@
     margin-top:12px; display:inline-flex; align-items:center; gap:6px;
     font-size:12px; padding:4px 10px; border-radius:999px;
     background:rgba(255,255,255,.13); border:1px solid rgba(255,255,255,.2);
+    max-width:100%;
+  }
+  .sync-pill.sync-pill-alert{
+    background:#B3432A; border-color:#B3432A; color:#fff; font-weight:600;
+    white-space:normal; line-height:1.4; border-radius:12px; padding:8px 12px;
+  }
+  .sync-pill.sync-pill-warn{
+    background:#C97C1F; border-color:#C97C1F; color:#fff; font-weight:600;
+    white-space:normal; line-height:1.4; border-radius:12px; padding:8px 12px;
   }
   .sync-dot{width:7px; height:7px; border-radius:50%; background:#63C08A;}
   .sync-dot.local{background:var(--amber);}
+
+  .test-bar{
+    margin-top:8px; display:flex; align-items:center; gap:8px; flex-wrap:wrap;
+    background:rgba(255,255,255,.08); border:1px dashed rgba(255,255,255,.3);
+    border-radius:10px; padding:7px 10px; font-size:11.5px;
+  }
+  .test-label{font-weight:600; opacity:.9;}
+  .test-bar button{
+    background:rgba(255,255,255,.16); border:1px solid rgba(255,255,255,.3); color:#fff;
+    font-size:11px; font-weight:600; padding:5px 10px; border-radius:7px; cursor:pointer;
+  }
+  .test-bar button:disabled{ opacity:.4; cursor:default; }
+  .test-info{ opacity:.75; font-style:italic; }
 
   /* ---------- Match strip ---------- */
   .match-strip{
@@ -427,6 +450,12 @@
     </div>
   </div>
   <div class="sync-pill" id="syncPill"><span class="sync-dot local" id="syncDot"></span><span id="syncLabel">Checking sync…</span></div>
+  <div class="test-bar" id="testBar">
+    <span class="test-label">🧪 Trying the app out?</span>
+    <button id="saveBackupBtn">💾 Save backup</button>
+    <button id="restoreBackupBtn" disabled>⏪ Restore backup</button>
+    <span class="test-info" id="backupInfo">No backup saved yet</span>
+  </div>
 </header>
 
 <div class="match-strip" id="matchStrip"></div>
@@ -460,14 +489,14 @@
       LOCAL MODE (saved to this browser only via localStorage) so it's
       still fully usable right now. See the chat reply for setup steps.
    ========================================================================= */
-const firebaseConfig = {
-  apiKey: "AIzaSyCf_KbBhG9GH8GESPordl2XdkG7yfb2qwk",
-  authDomain: "jackd63-team.firebaseapp.com",
-  projectId: "jackd63-team",
-  storageBucket: "jackd63-team.firebasestorage.app",
-  messagingSenderId: "226421653847",
-  appId: "1:226421653847:web:3cc8421c4e0ec6f925fe12"
-};
+  const firebaseConfig = {
+    apiKey: "REPLACE_ME",
+    authDomain: "REPLACE_ME.firebaseapp.com",
+    projectId: "REPLACE_ME",
+    storageBucket: "REPLACE_ME.appspot.com",
+    messagingSenderId: "REPLACE_ME",
+    appId: "REPLACE_ME"
+  };
   const FIRESTORE_COLLECTION = "jakd63-roster";
   const FIRESTORE_DOC = "season-2026-27";
 
@@ -541,6 +570,62 @@ const firebaseConfig = {
   const MATCH1_STARTERS = ["Elliott","Alfie","Arlo","Bert","Roman","Ted","Callum"];
   const MATCH1_SUBS = ["Cruz","Theo","Raf"];
 
+  // Some players have a hard limit on how long they can play in one
+  // continuous stretch (medical/fitness reasons etc). Their total match
+  // minutes stay exactly the same as everyone else's fair share — this
+  // only controls how that time gets split up.
+  const STINT_CAP_MINUTES = { Ted: 20 };
+
+  // The rotation below gives every player ONE continuous on-field stint by
+  // default. For a capped player, that stint needs splitting into two.
+  // Because of how the rotation is built (see buildRotationSchedule), a
+  // player's on-field time is contiguous UNLESS their position in the
+  // roster array places their rest-window away from either end — in which
+  // case it naturally splits into an early stint + a late stint around one
+  // rest break. This finds the array index that makes both halves fit
+  // under the cap, and as evenly sized as possible.
+  function findCapSplitIndex(onFieldCount, blockLen, cap){
+    let best = null, bestBalance = Infinity;
+    for(let i=0;i<onFieldCount;i++){
+      const stint1 = (i+1)*blockLen;
+      const stint2 = (onFieldCount-i-1)*blockLen;
+      if(stint1 <= cap + 1e-6 && stint2 <= cap + 1e-6){
+        const balance = Math.abs(stint1-stint2);
+        if(balance < bestBalance){ bestBalance = balance; best = i; }
+      }
+    }
+    return best;
+  }
+  function placeAtIndex(arr, player, idx){
+    if(!arr.includes(player)) return arr;
+    const without = arr.filter(p => p !== player);
+    const clamped = Math.max(0, Math.min(idx, without.length));
+    return [...without.slice(0, clamped), player, ...without.slice(clamped)];
+  }
+  // Reorders the rotation array (if needed) so any capped player present
+  // gets a valid two-stint split. Returns the (possibly reordered) array
+  // plus any warnings for weeks where the squad is too small to split safely.
+  function applyStintCaps(playersInRotation, onFieldCount, totalMinutes){
+    const R = playersInRotation.length;
+    let ordered = playersInRotation;
+    const capWarnings = [];
+    if(R === 0) return {ordered, capWarnings};
+    const blockLen = totalMinutes / R;
+    Object.keys(STINT_CAP_MINUTES).forEach(name => {
+      if(!ordered.includes(name)) return;
+      const cap = STINT_CAP_MINUTES[name];
+      const fairShare = totalMinutes * onFieldCount / R;
+      if(fairShare <= cap + 1e-6) return; // already within cap as one stint, nothing to do
+      const idx = findCapSplitIndex(onFieldCount, blockLen, cap);
+      if(idx === null){
+        capWarnings.push(`${name}'s ${cap}-minute cap can't be fully kept this week — with only ${R} outfield players available, the natural stint works out to about ${Math.round(fairShare)} minutes. Plan a manual extra substitution for ${name} partway through their time on, if needed.`);
+        return;
+      }
+      ordered = placeAtIndex(ordered, name, idx);
+    });
+    return {ordered, capWarnings};
+  }
+
 /* =========================================================================
    3. FAIRNESS ENGINE
    ---------------------------------------------------------------------
@@ -596,12 +681,14 @@ const firebaseConfig = {
   // only one keeper-capable player is available that week.
   function buildInMatchSchedule(rosterOrdered, totalMinutes, pinnedGK){
     if(!pinnedGK){
-      const s = buildRotationSchedule(rosterOrdered, totalMinutes, 7);
+      const {ordered, capWarnings} = applyStintCaps(rosterOrdered, 7, totalMinutes);
+      const s = buildRotationSchedule(ordered, totalMinutes, 7);
       const minutesByPlayer = {};
-      rosterOrdered.forEach(p => minutesByPlayer[p] = s.minutesEachValue);
-      return {...s, minutesByPlayer, pinnedGK:null};
+      ordered.forEach(p => minutesByPlayer[p] = s.minutesEachValue);
+      return {...s, minutesByPlayer, pinnedGK:null, capWarnings};
     }
-    const others = rosterOrdered.filter(p => p !== pinnedGK);
+    const others0 = rosterOrdered.filter(p => p !== pinnedGK);
+    const {ordered: others, capWarnings} = applyStintCaps(others0, 6, totalMinutes);
     const s = buildRotationSchedule(others, totalMinutes, 6);
     const minutesByPlayer = {[pinnedGK]: totalMinutes};
     others.forEach(p => minutesByPlayer[p] = s.minutesEachValue);
@@ -612,7 +699,8 @@ const firebaseConfig = {
       minutesByPlayer,
       blockLen: s.blockLen,
       rosterSize: rosterOrdered.length,
-      pinnedGK
+      pinnedGK,
+      capWarnings
     };
   }
 
@@ -807,7 +895,8 @@ const firebaseConfig = {
     results.push({
       fixture: FIXTURES[0], roster:m1full, starters:m1Built.startersPick, subs:m1Built.subsPick,
       rested: PLAYERS.filter(p=>!m1full.includes(p)), unavailable:[], schedule:sched1,
-      fixed:true, warning:null, gkNote:`${m1GK} plays the full match in goal and won't be rotated off.`
+      fixed:true, warning:null, gkNote:`${m1GK} plays the full match in goal and won't be rotated off.`,
+      capWarnings: sched1.capWarnings || []
     });
 
     // --- Matches 2-25: fairness engine + goalkeeper policy ---
@@ -867,7 +956,8 @@ const firebaseConfig = {
 
       results.push({
         fixture: FIXTURES[i-1], roster:orderedRoster, starters:startersPick, subs:subsPick,
-        rested, unavailable, schedule:sched, fixed:false, warning, gkNote
+        rested, unavailable, schedule:sched, fixed:false, warning, gkNote,
+        capWarnings: sched.capWarnings || []
       });
     }
 
@@ -881,6 +971,7 @@ const firebaseConfig = {
   let currentMatch = 1;
   let liveState = null; // {matchNum, status:'running'|'paused'|'ended', kickoffAt, pausedAt, totalPausedMs, snapshot, onFieldSet, subsLog, goals, opponentGoals}
   let matchReports = {}; // { matchNumber: reportObject } — persists after a live session ends
+  let lastBackup = null; // {unavailability, live, reports, savedAt} — manual snapshot for testing/undo
   let useFirestore = false;
   let db = null;
 
@@ -889,17 +980,24 @@ const firebaseConfig = {
   }
 
   function setSyncPill(mode){
+    const pill = document.getElementById('syncPill');
     const dot = document.getElementById('syncDot');
     const label = document.getElementById('syncLabel');
+    pill.classList.remove('sync-pill-alert', 'sync-pill-warn');
     if(mode === 'live'){
       dot.className = 'sync-dot';
       label.textContent = 'Live sync — shared with all coaches';
     } else if(mode === 'connecting'){
       dot.className = 'sync-dot local';
       label.textContent = 'Connecting to shared sync…';
-    } else {
+    } else if(mode === 'offline-queued'){
+      pill.classList.add('sync-pill-warn');
       dot.className = 'sync-dot local';
-      label.textContent = 'Local mode — saved on this device only (add Firebase config for shared sync)';
+      label.textContent = '📡 No connection right now — saving on this device and will catch up automatically once back online. Don\'t close the tab until it does.';
+    } else {
+      pill.classList.add('sync-pill-alert');
+      dot.className = 'sync-dot local';
+      label.textContent = '⚠ NOT synced — this device only sees its own copy. Other coaches will NOT see this. Reload the page fully (hard refresh) or re-open the link.';
     }
   }
 
@@ -916,6 +1014,10 @@ const firebaseConfig = {
       const rawReports = localStorage.getItem('jakd63-reports');
       matchReports = rawReports ? JSON.parse(rawReports) : {};
     }catch(e){ matchReports = {}; }
+    try{
+      const rawBackup = localStorage.getItem('jakd63-backup');
+      lastBackup = rawBackup ? JSON.parse(rawBackup) : null;
+    }catch(e){ lastBackup = null; }
   }
   function saveLocal(){
     localStorage.setItem('jakd63-unavailability', JSON.stringify(unavailability));
@@ -928,47 +1030,126 @@ const firebaseConfig = {
     }
   }
 
+  /* -------------------------------------------------------------------------
+     BACKUP / RESTORE — a manual snapshot-and-undo for trying the app out.
+     "Save backup" freezes exactly what's live right now (availability,
+     any in-progress or ended match, saved reports). "Restore backup" puts
+     all of that back exactly as it was, wiping out anything done since —
+     kickoffs, goals, subs, reports, unavailable toggles — the whole lot.
+     ------------------------------------------------------------------------- */
+  function saveBackup(){
+    const backup = {
+      unavailability: JSON.parse(JSON.stringify(unavailability)),
+      live: liveState ? JSON.parse(JSON.stringify(liveState)) : null,
+      reports: JSON.parse(JSON.stringify(matchReports)),
+      savedAt: Date.now()
+    };
+    lastBackup = backup;
+    if(useFirestore && db){
+      db.collection(FIRESTORE_COLLECTION).doc(FIRESTORE_DOC).set({backup}, {merge:true}).catch(e => console.error(e));
+    } else {
+      try{ localStorage.setItem('jakd63-backup', JSON.stringify(backup)); }catch(e){}
+    }
+    updateBackupUI();
+  }
+
+  function restoreBackup(){
+    if(!lastBackup) return;
+    const when = new Date(lastBackup.savedAt).toLocaleString();
+    showConfirm(
+      'Restore to the saved backup?',
+      `This wipes out everything done since ${when} — any test kickoffs, goals, substitutions, reports, and availability changes — and puts the app back exactly as it was at that point. This can't be undone (unless you save a fresh backup first).`,
+      'Restore backup',
+      () => {
+        unavailability = JSON.parse(JSON.stringify(lastBackup.unavailability));
+        liveState = lastBackup.live ? JSON.parse(JSON.stringify(lastBackup.live)) : null;
+        matchReports = JSON.parse(JSON.stringify(lastBackup.reports));
+        if(useFirestore && db){
+          db.collection(FIRESTORE_COLLECTION).doc(FIRESTORE_DOC)
+            .set({unavailability, live: liveState, reports: matchReports}, {merge:true})
+            .catch(e => console.error(e));
+        } else {
+          saveLocal();
+          try{
+            localStorage.setItem('jakd63-live', liveState ? JSON.stringify(liveState) : '');
+            localStorage.setItem('jakd63-reports', JSON.stringify(matchReports));
+          }catch(e){}
+        }
+        shownAlertKeys = new Set(); alertQueue = []; renderAlertOverlay();
+        renderAll(); updateLiveBarDisplay(); renderLiveConsole();
+      }
+    );
+  }
+
+  function updateBackupUI(){
+    const info = document.getElementById('backupInfo');
+    const restoreBtn = document.getElementById('restoreBackupBtn');
+    if(!info || !restoreBtn) return;
+    if(lastBackup){
+      info.textContent = `Last backup: ${new Date(lastBackup.savedAt).toLocaleString()}`;
+      restoreBtn.disabled = false;
+    } else {
+      info.textContent = 'No backup saved yet';
+      restoreBtn.disabled = true;
+    }
+  }
+
   function initFirebase(){
     if(!isConfigFilled()){
       setSyncPill('offline');
       loadLocal();
       renderAll();
+      updateBackupUI();
       return;
     }
     try{
       setSyncPill('connecting');
       firebase.initializeApp(firebaseConfig);
       db = firebase.firestore();
+      // Durable offline queue: if the connection drops mid-match (very
+      // common out on a pitch), writes made while offline are saved to this
+      // device's disk and automatically resent the moment it reconnects —
+      // instead of silently vanishing if the page gets reloaded first.
+      db.enablePersistence({synchronizeTabs:true}).catch((err) => {
+        console.warn('Offline persistence unavailable (', err.code, ') — another tab may be open, or the browser doesn\'t support it. Sync will still work, just without offline queueing.');
+      });
       useFirestore = true;
       const ref = db.collection(FIRESTORE_COLLECTION).doc(FIRESTORE_DOC);
       ref.onSnapshot((snap) => {
-        setSyncPill('live');
+        setSyncPill(navigator.onLine === false ? 'offline-queued' : 'live');
         if(snap.exists){
           const data = snap.data() || {};
           unavailability = data.unavailability || {};
           liveState = data.live || null;
           matchReports = data.reports || {};
+          lastBackup = data.backup || null;
         } else {
           unavailability = {};
           liveState = null;
           matchReports = {};
-          ref.set({unavailability:{}, live:null, reports:{}}, {merge:true});
+          lastBackup = null;
+          ref.set({unavailability:{}, live:null, reports:{}, backup:null}, {merge:true});
         }
         renderAll();
         updateLiveBarDisplay();
+        updateBackupUI();
       }, (err) => {
         console.error('Firestore sync error, falling back to local mode:', err);
         useFirestore = false;
         setSyncPill('offline');
         loadLocal();
         renderAll();
+        updateBackupUI();
       });
+      window.addEventListener('online', () => { if(useFirestore) setSyncPill('live'); });
+      window.addEventListener('offline', () => { if(useFirestore) setSyncPill('offline-queued'); });
     }catch(e){
       console.error(e);
       useFirestore = false;
       setSyncPill('offline');
       loadLocal();
       renderAll();
+      updateBackupUI();
     }
   }
 
@@ -1161,14 +1342,56 @@ const firebaseConfig = {
   }
 
   // ---- Confirm a scheduled substitution actually happening ----
+  function liveDocRef(){ return db.collection(FIRESTORE_COLLECTION).doc(FIRESTORE_DOC); }
+
+  // Safely add one entry to a live-match array field (goals, opponentGoals,
+  // subsLog, onFieldSet). Uses Firestore's arrayUnion so that if two coaches'
+  // phones both add something at nearly the same moment, BOTH entries land —
+  // instead of whichever phone writes second silently wiping out the other's
+  // entry (which is what was dropping logged goals).
+  function addToLiveArray(field, item){
+    if(!liveState) return;
+    liveState = {...liveState, [field]: [...(liveState[field]||[]), item]};
+    updateLiveBarDisplay(); renderLiveConsole();
+    if(useFirestore && db){
+      liveDocRef().update({[`live.${field}`]: firebase.firestore.FieldValue.arrayUnion(item)})
+        .catch(e => { console.error('Sync add failed, falling back to full write:', e); writeLive(liveState); });
+    } else {
+      try{ localStorage.setItem('jakd63-live', JSON.stringify(liveState)); }catch(e){}
+    }
+  }
+  function removeFromLiveArray(field, item){
+    if(!liveState) return;
+    liveState = {...liveState, [field]: (liveState[field]||[]).filter(x => x !== item)};
+    updateLiveBarDisplay(); renderLiveConsole();
+    if(useFirestore && db){
+      liveDocRef().update({[`live.${field}`]: firebase.firestore.FieldValue.arrayRemove(item)})
+        .catch(e => { console.error('Sync remove failed, falling back to full write:', e); writeLive(liveState); });
+    } else {
+      try{ localStorage.setItem('jakd63-live', JSON.stringify(liveState)); }catch(e){}
+    }
+  }
+
   function confirmSubFromAlert(){
     const a = alertQueue[0];
     if(!a || !liveState || !a.off || !a.on) return;
     const atMinuteActual = Math.round((getElapsedMs(liveState) / 60000) * 10) / 10;
     const entry = {idx:a.idx, plannedAt:a.atMinute, atMinuteActual, off:a.off, on:a.on, onPos:a.onPos, reshuffled:a.reshuffled||[], addedAt: Date.now()};
-    const onFieldSet = (liveState.onFieldSet||[]).filter(p => p !== a.off).concat([a.on]);
-    const subsLog = [...(liveState.subsLog||[]), entry];
-    writeLive({...liveState, onFieldSet, subsLog});
+
+    liveState = {
+      ...liveState,
+      onFieldSet: (liveState.onFieldSet||[]).filter(p => p !== a.off).concat([a.on]),
+      subsLog: [...(liveState.subsLog||[]), entry]
+    };
+    updateLiveBarDisplay(); renderLiveConsole();
+    if(useFirestore && db){
+      const ref = liveDocRef();
+      ref.update({'live.subsLog': firebase.firestore.FieldValue.arrayUnion(entry)}).catch(e => { console.error(e); writeLive(liveState); });
+      ref.update({'live.onFieldSet': firebase.firestore.FieldValue.arrayRemove(a.off)}).catch(e => console.error(e));
+      ref.update({'live.onFieldSet': firebase.firestore.FieldValue.arrayUnion(a.on)}).catch(e => console.error(e));
+    } else {
+      try{ localStorage.setItem('jakd63-live', JSON.stringify(liveState)); }catch(e){}
+    }
     alertQueue.shift();
     renderAlertOverlay();
   }
@@ -1207,35 +1430,42 @@ const firebaseConfig = {
       const others = liveState.onFieldSet.filter(p => p !== scorer);
       showPlayerPicker('Assist?', `${scorer} scored at ${fmtReportTime(atMinute)}. Did anyone assist?`, others, 'No assist', (assist) => {
         const goal = {atMinute, scorer, assist: assist || null, addedAt: Date.now()};
-        writeLive({...liveState, goals: [...(liveState.goals||[]), goal]});
+        addToLiveArray('goals', goal);
       });
     });
   }
   function recordOpponentGoal(){
     if(!liveState) return;
     const atMinute = Math.round((getElapsedMs(liveState) / 60000) * 10) / 10;
-    writeLive({...liveState, opponentGoals: [...(liveState.opponentGoals||[]), {atMinute, addedAt: Date.now()}]});
+    addToLiveArray('opponentGoals', {atMinute, addedAt: Date.now()});
   }
 
   // ---- Undo (most recently logged item, across goals / opponent goals / subs) ----
   function undoLastEvent(){
     if(!liveState) return;
     const candidates = [];
-    (liveState.goals||[]).forEach((g,i) => candidates.push({type:'goal', i, addedAt:g.addedAt||0}));
-    (liveState.opponentGoals||[]).forEach((g,i) => candidates.push({type:'oppGoal', i, addedAt:g.addedAt||0}));
-    (liveState.subsLog||[]).forEach((s,i) => candidates.push({type:'sub', i, addedAt:s.addedAt||0}));
+    (liveState.goals||[]).forEach(g => candidates.push({type:'goal', item:g, addedAt:g.addedAt||0}));
+    (liveState.opponentGoals||[]).forEach(g => candidates.push({type:'oppGoal', item:g, addedAt:g.addedAt||0}));
+    (liveState.subsLog||[]).forEach(s => candidates.push({type:'sub', item:s, addedAt:s.addedAt||0}));
     if(!candidates.length) return;
     candidates.sort((a,b) => b.addedAt - a.addedAt);
     const last = candidates[0];
     showConfirm('Undo the last entry?', 'This removes the most recently logged goal or substitution from the match log.', 'Undo', () => {
       if(last.type === 'goal'){
-        writeLive({...liveState, goals: liveState.goals.filter((_,i) => i !== last.i)});
+        removeFromLiveArray('goals', last.item);
       } else if(last.type === 'oppGoal'){
-        writeLive({...liveState, opponentGoals: liveState.opponentGoals.filter((_,i) => i !== last.i)});
+        removeFromLiveArray('opponentGoals', last.item);
       } else {
-        const removed = liveState.subsLog[last.i];
-        const onFieldSet = liveState.onFieldSet.filter(p => p !== removed.on).concat([removed.off]);
-        writeLive({...liveState, subsLog: liveState.subsLog.filter((_,i) => i !== last.i), onFieldSet});
+        removeFromLiveArray('subsLog', last.item);
+        liveState = {...liveState, onFieldSet: liveState.onFieldSet.filter(p => p !== last.item.on).concat([last.item.off])};
+        updateLiveBarDisplay(); renderLiveConsole();
+        if(useFirestore && db){
+          const ref = liveDocRef();
+          ref.update({'live.onFieldSet': firebase.firestore.FieldValue.arrayRemove(last.item.on)}).catch(e => console.error(e));
+          ref.update({'live.onFieldSet': firebase.firestore.FieldValue.arrayUnion(last.item.off)}).catch(e => console.error(e));
+        } else {
+          try{ localStorage.setItem('jakd63-live', JSON.stringify(liveState)); }catch(e){}
+        }
       }
     });
   }
@@ -1295,7 +1525,10 @@ const firebaseConfig = {
   // ---- Live console: goal/sub log + report trigger, shown whenever a live session exists ----
   function renderLiveConsole(){
     const card = document.getElementById('liveConsoleCard');
-    if(!liveState){ card.classList.add('hidden'); return; }
+    // Only show this panel while looking at the match tab it actually belongs
+    // to — otherwise switching to a different fixture would still show
+    // today's score/log, which is confusing and wrong.
+    if(!liveState || liveState.matchNum !== currentMatch){ card.classList.add('hidden'); return; }
     card.classList.remove('hidden');
     const goals = liveState.goals || [], oppGoals = liveState.opponentGoals || [], subs = liveState.subsLog || [];
     const combinedLog = [
@@ -1310,11 +1543,12 @@ const firebaseConfig = {
       <div class="section-title">Live Match <span class="count">Match ${liveState.matchNum} vs ${liveState.snapshot.opponent}</span></div>
       <div class="score-strip">${goals.length} <span class="vs">us</span> — ${oppGoals.length} <span class="vs">${liveState.snapshot.opponent}</span></div>
       <div class="console-actions">
-        <button class="console-btn goal" id="goalBtn" ${ended?'disabled':''}>⚽ Goal</button>
-        <button class="console-btn opp-goal" id="oppGoalBtn" ${ended?'disabled':''}>🥅 Opponent goal</button>
+        <button class="console-btn goal" id="goalBtn">⚽ Goal</button>
+        <button class="console-btn opp-goal" id="oppGoalBtn">🥅 Opponent goal</button>
         <button class="console-btn ghost-btn" id="undoBtn">↩ Undo last entry</button>
         ${ended ? (hasReport ? `<button class="console-btn report" id="viewReportBtn">📋 View match report</button>` : `<button class="console-btn report" id="genReportBtn">📋 Generate match report</button>`) : ''}
       </div>
+      ${ended ? `<div class="note-box">Match ended — you can still add a missed goal or undo an entry below before generating the report.</div>` : ''}
       ${combinedLog.length ? `<ul class="event-log">${combinedLog.map(e => `<li>${e.html}</li>`).join('')}</ul>` : `<div class="note-box">No goals or substitutions logged yet.</div>`}
     `;
     const wire = (id, fn) => { const el = document.getElementById(id); if(el) el.onclick = fn; };
@@ -1383,8 +1617,11 @@ const firebaseConfig = {
     document.getElementById('livePauseBtn').onclick = () => pauseLive();
     document.getElementById('liveResumeBtn').onclick = () => requestResumeLive();
     document.getElementById('liveEndBtn').onclick = () => endLive();
+    document.getElementById('saveBackupBtn').onclick = saveBackup;
+    document.getElementById('restoreBackupBtn').onclick = restoreBackup;
     updateLiveBarDisplay();
     renderLiveConsole();
+    updateBackupUI();
     setInterval(tickLive, 500);
   }
 
@@ -1392,14 +1629,26 @@ const firebaseConfig = {
    6. THEME
    ========================================================================= */
   function initTheme(){
-    const saved = localStorage.getItem('jakd63-theme');
-    const theme = saved || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    let theme = 'light';
+    try{
+      const saved = localStorage.getItem('jakd63-theme');
+      if(saved){
+        theme = saved;
+      } else if(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches){
+        theme = 'dark';
+      }
+    }catch(e){
+      console.error('Theme detection failed, defaulting to light:', e);
+    }
     document.documentElement.setAttribute('data-theme', theme);
-    document.getElementById('themeToggle').addEventListener('click', () => {
+
+    const toggle = document.getElementById('themeToggle');
+    if(!toggle) return;
+    toggle.addEventListener('click', () => {
       const cur = document.documentElement.getAttribute('data-theme');
       const next = cur === 'dark' ? 'light' : 'dark';
       document.documentElement.setAttribute('data-theme', next);
-      localStorage.setItem('jakd63-theme', next);
+      try{ localStorage.setItem('jakd63-theme', next); }catch(e){ /* private-browsing storage block — theme still switches for this session */ }
     });
   }
 
@@ -1441,6 +1690,7 @@ const firebaseConfig = {
       ${match.fixture.dateFlag ? `<div class="note-box">The year on this fixture reads ${match.fixture.date.split(' ').pop()} in the list you supplied — worth double-checking against the league fixture list, since the 2026/27 season runs into 2027.</div>` : ''}
       ${match.warning ? `<div class="warning-box">⚠ ${match.warning}</div>` : ''}
       ${match.gkNote ? `<div class="note-box">🧤 ${match.gkNote}</div>` : ''}
+      ${(match.capWarnings && match.capWarnings.length) ? match.capWarnings.map(w => `<div class="warning-box">⏱ ${w}</div>`).join('') : ''}
       ${match.fixed ? `<div class="lock-note">🔒 Match 1 roster is locked as set by the coach — rotation for the fairness engine starts from Match 2.</div>` : ''}
       <div id="kickoffArea"></div>
     `;
