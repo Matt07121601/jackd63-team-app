@@ -381,6 +381,24 @@
   .report-score{font-family:'Oswald'; font-size:34px; text-align:center; margin:8px 0 4px;}
   .report-score .opp{color:var(--ink-soft); font-size:20px;}
   .report-meta-line{text-align:center; font-size:12.5px; color:var(--ink-soft); margin-bottom:14px;}
+
+  /* ---------- Substitution tabs / manual sub form ---------- */
+  .sub-tabs{display:flex; gap:8px; margin-bottom:12px;}
+  .sub-tab-btn{
+    flex:1; padding:9px 10px; border-radius:10px; border:1px solid var(--line);
+    background:var(--bg-alt); color:var(--ink-soft); font-weight:600; font-size:13px; cursor:pointer;
+  }
+  .sub-tab-btn.active{ background:var(--pitch); color:#fff; border-color:var(--pitch); }
+  .made-early-btn{
+    margin-top:6px; background:var(--amber-soft); color:var(--amber); border:1px solid var(--amber);
+    font-size:11.5px; font-weight:600; padding:4px 10px; border-radius:7px; cursor:pointer;
+  }
+  .manual-sub-row{ margin-bottom:12px; }
+  .manual-sub-row label{ display:block; font-size:12px; color:var(--ink-soft); margin-bottom:4px; font-weight:600; }
+  .manual-sub-row select{
+    width:100%; padding:10px; border-radius:9px; border:1px solid var(--line);
+    background:var(--card); color:var(--ink); font-size:14px;
+  }
 </style>
 </head>
 <body>
@@ -572,59 +590,9 @@
 
   // Some players have a hard limit on how long they can play in one
   // continuous stretch (medical/fitness reasons etc). Their total match
-  // minutes stay exactly the same as everyone else's fair share — this
-  // only controls how that time gets split up.
-  const STINT_CAP_MINUTES = { Ted: 20 };
-
-  // The rotation below gives every player ONE continuous on-field stint by
-  // default. For a capped player, that stint needs splitting into two.
-  // Because of how the rotation is built (see buildRotationSchedule), a
-  // player's on-field time is contiguous UNLESS their position in the
-  // roster array places their rest-window away from either end — in which
-  // case it naturally splits into an early stint + a late stint around one
-  // rest break. This finds the array index that makes both halves fit
-  // under the cap, and as evenly sized as possible.
-  function findCapSplitIndex(onFieldCount, blockLen, cap){
-    let best = null, bestBalance = Infinity;
-    for(let i=0;i<onFieldCount;i++){
-      const stint1 = (i+1)*blockLen;
-      const stint2 = (onFieldCount-i-1)*blockLen;
-      if(stint1 <= cap + 1e-6 && stint2 <= cap + 1e-6){
-        const balance = Math.abs(stint1-stint2);
-        if(balance < bestBalance){ bestBalance = balance; best = i; }
-      }
-    }
-    return best;
-  }
-  function placeAtIndex(arr, player, idx){
-    if(!arr.includes(player)) return arr;
-    const without = arr.filter(p => p !== player);
-    const clamped = Math.max(0, Math.min(idx, without.length));
-    return [...without.slice(0, clamped), player, ...without.slice(clamped)];
-  }
-  // Reorders the rotation array (if needed) so any capped player present
-  // gets a valid two-stint split. Returns the (possibly reordered) array
-  // plus any warnings for weeks where the squad is too small to split safely.
-  function applyStintCaps(playersInRotation, onFieldCount, totalMinutes){
-    const R = playersInRotation.length;
-    let ordered = playersInRotation;
-    const capWarnings = [];
-    if(R === 0) return {ordered, capWarnings};
-    const blockLen = totalMinutes / R;
-    Object.keys(STINT_CAP_MINUTES).forEach(name => {
-      if(!ordered.includes(name)) return;
-      const cap = STINT_CAP_MINUTES[name];
-      const fairShare = totalMinutes * onFieldCount / R;
-      if(fairShare <= cap + 1e-6) return; // already within cap as one stint, nothing to do
-      const idx = findCapSplitIndex(onFieldCount, blockLen, cap);
-      if(idx === null){
-        capWarnings.push(`${name}'s ${cap}-minute cap can't be fully kept this week — with only ${R} outfield players available, the natural stint works out to about ${Math.round(fairShare)} minutes. Plan a manual extra substitution for ${name} partway through their time on, if needed.`);
-        return;
-      }
-      ordered = placeAtIndex(ordered, name, idx);
-    });
-    return {ordered, capWarnings};
-  }
+  // minutes still work out equal to everyone else's fair share — this only
+  // controls how that time gets split up into shorter stints.
+  const STINT_CAP_MINUTES = { Ted: 15, Zachary: 15 };
 
 /* =========================================================================
    3. FAIRNESS ENGINE
@@ -635,42 +603,96 @@
    total equal AND automatically pays back anyone marked unavailable —
    they simply rank first as soon as they're available again.
 
-   Within a match: a sliding "rest window" of size (rosterSize-7) rotates
-   through the roster in equal time-blocks, so every rostered player gets
-   exactly the same share of the 7 on-field minutes for that match, using
-   exactly one substitution per changeover (never more than 3 players sit
-   the bench at kick-off, matching the league's 3-substitute rule).
+   Within a match: a greedy rotation always benches whoever has played
+   longest and brings on whoever has rested longest. That converges on
+   equal total minutes for everyone, and it forces a change the instant a
+   capped player (see STINT_CAP_MINUTES) reaches their continuous-minutes
+   limit — however many times that needs to happen across the match. The
+   same simulator is reused live, mid-match, to rebuild the remaining plan
+   after a manual or early substitution (see rebuildRemainingPlan below).
    ========================================================================= */
 
-  function buildRotationSchedule(rosterOrdered, totalMinutes, onFieldCount){
+  function simulateRotation(rosterOrdered, totalMinutes, onFieldCount, opts){
+    opts = opts || {};
     const R = rosterOrdered.length;
-    const winSize = Math.max(0, R - onFieldCount);
-    const blockLen = R > 0 ? totalMinutes / R : 0;
-    const windows = [];
-    for(let k=0;k<R;k++){
-      const w = new Set();
-      for(let j=0;j<winSize;j++) w.add((k+onFieldCount+j)%R);
-      windows.push(w);
-    }
+    const startT = opts.startT || 0;
+    const initialOnField = opts.initialOnField || rosterOrdered.slice(0, onFieldCount);
+    const minutes = {};
+    rosterOrdered.forEach(p => { minutes[p] = (opts.initialMinutes && opts.initialMinutes[p]) || 0; });
+    const onField = new Set(initialOnField);
+    const continuousStart = {};
+    onField.forEach(p => {
+      continuousStart[p] = (opts.initialContinuousStart && opts.initialContinuousStart[p] !== undefined)
+        ? opts.initialContinuousStart[p] : startT;
+    });
+
     const events = [];
-    for(let k=1;k<R;k++){
-      const prev = windows[k-1], cur = windows[k];
-      let on, off;
-      for(const idx of prev){ if(!cur.has(idx)){ on = idx; break; } }
-      for(const idx of cur){ if(!prev.has(idx)){ off = idx; break; } }
-      if(on !== undefined && off !== undefined){
-        events.push({
-          atMinute: Math.round(blockLen * k * 10) / 10,
-          on: rosterOrdered[on],
-          off: rosterOrdered[off],
-          isHalftime: Math.abs(blockLen*k - totalMinutes/2) < 0.01
-        });
+    if(R <= onFieldCount || totalMinutes - startT <= 1e-6){
+      return {
+        onFieldAtStart: [...initialOnField],
+        benchAtStart: rosterOrdered.filter(p => !onField.has(p)),
+        events, minutesEachValue: totalMinutes*onFieldCount/Math.max(1,R),
+        finalMinutes: minutes, blockLen: 0, rosterSize:R
+      };
+    }
+
+    const remaining = totalMinutes - startT;
+    // Track minutes/caps at a fine grain internally (so a cap is caught at
+    // the right moment), but only trigger an ORDINARY fairness swap once
+    // the imbalance passes a much coarser threshold — otherwise it would
+    // rebalance on every tiny tick and produce dozens of unusable subs.
+    const checkStep = 0.25;
+    const fairnessThreshold = (totalMinutes / R) * 1.8;
+    let t = startT, guard = 0;
+    while(t < totalMinutes - 1e-6 && guard < 4000){
+      guard++;
+      const dt = Math.min(checkStep, totalMinutes - t);
+      t = Math.round((t + dt) * 100) / 100;
+      onField.forEach(p => { minutes[p] += dt; });
+
+      let forcedOff = null;
+      onField.forEach(p => {
+        const cap = STINT_CAP_MINUTES[p];
+        if(cap && !forcedOff && (t - continuousStart[p]) >= cap - 1e-6) forcedOff = p;
+      });
+
+      const bench = rosterOrdered.filter(p => !onField.has(p));
+      if(bench.length === 0) continue;
+
+      let offPlayer = null, onPlayer = null;
+      if(forcedOff){
+        offPlayer = forcedOff;
+        onPlayer = [...bench].sort((a,b) => minutes[a]-minutes[b])[0];
+      } else {
+        const worstOn = [...onField].sort((a,b) => minutes[b]-minutes[a])[0];
+        const bestBench = [...bench].sort((a,b) => minutes[a]-minutes[b])[0];
+        if(minutes[worstOn] - minutes[bestBench] > fairnessThreshold){
+          offPlayer = worstOn; onPlayer = bestBench;
+        }
+      }
+      if(offPlayer && onPlayer && offPlayer !== onPlayer){
+        onField.delete(offPlayer); onField.add(onPlayer);
+        continuousStart[onPlayer] = t;
+        const isHalftime = Math.abs(t - totalMinutes/2) < (checkStep/2 + 0.05);
+        events.push({atMinute: t, off: offPlayer, on: onPlayer, isHalftime});
       }
     }
-    const onFieldAtStart = rosterOrdered.filter((_,i)=>!windows[0].has(i));
-    const benchAtStart = rosterOrdered.filter((_,i)=>windows[0].has(i));
-    const minutesEachValue = R > 0 ? (totalMinutes * onFieldCount / R) : 0;
-    return {onFieldAtStart, benchAtStart, events, minutesEachValue, blockLen, rosterSize:R};
+
+    const minutesEachValue = totalMinutes*onFieldCount/R;
+    return {
+      onFieldAtStart: [...initialOnField],
+      benchAtStart: rosterOrdered.filter(p => !initialOnField.includes(p)),
+      events, minutesEachValue, finalMinutes: minutes, blockLen: checkStep, rosterSize:R
+    };
+  }
+
+  function checkCapWarnings(rosterOrdered, onFieldCount, capWarnings){
+    const R = rosterOrdered.length;
+    if(R > onFieldCount) return; // rotation was possible, so caps are respected by construction
+    Object.keys(STINT_CAP_MINUTES).forEach(name => {
+      if(!rosterOrdered.includes(name)) return;
+      capWarnings.push(`${name}'s ${STINT_CAP_MINUTES[name]}-minute cap can't be kept this week — with only ${R} outfield players available there's no one to rotate in. Plan a manual extra substitution for ${name} partway through, if needed.`);
+    });
   }
 
   // A normal match rotates all of `rosterOrdered` through 7 on-field slots.
@@ -680,18 +702,19 @@
   // is how the app guarantees a keeper is on the pitch every minute when
   // only one keeper-capable player is available that week.
   function buildInMatchSchedule(rosterOrdered, totalMinutes, pinnedGK){
+    const capWarnings = [];
     if(!pinnedGK){
-      const {ordered, capWarnings} = applyStintCaps(rosterOrdered, 7, totalMinutes);
-      const s = buildRotationSchedule(ordered, totalMinutes, 7);
+      const s = simulateRotation(rosterOrdered, totalMinutes, 7);
       const minutesByPlayer = {};
-      ordered.forEach(p => minutesByPlayer[p] = s.minutesEachValue);
+      rosterOrdered.forEach(p => minutesByPlayer[p] = s.finalMinutes[p] || 0);
+      checkCapWarnings(rosterOrdered, 7, capWarnings);
       return {...s, minutesByPlayer, pinnedGK:null, capWarnings};
     }
-    const others0 = rosterOrdered.filter(p => p !== pinnedGK);
-    const {ordered: others, capWarnings} = applyStintCaps(others0, 6, totalMinutes);
-    const s = buildRotationSchedule(others, totalMinutes, 6);
+    const others = rosterOrdered.filter(p => p !== pinnedGK);
+    const s = simulateRotation(others, totalMinutes, 6);
     const minutesByPlayer = {[pinnedGK]: totalMinutes};
-    others.forEach(p => minutesByPlayer[p] = s.minutesEachValue);
+    others.forEach(p => minutesByPlayer[p] = s.finalMinutes[p] || 0);
+    checkCapWarnings(others, 6, capWarnings);
     return {
       onFieldAtStart: [pinnedGK, ...s.onFieldAtStart],
       benchAtStart: s.benchAtStart,
@@ -777,6 +800,27 @@
     for(const pos of Object.keys(next)){ if(next[pos] === offPlayer) delete next[pos]; }
     const ok = augmentPath(onPlayer, next, eligFn);
     return {matchPos: next, ok};
+  }
+
+  // Walks a bare list of {off,on} events forward from a starting position
+  // map, attaching the resulting onPos/reshuffled/feasible to each — reused
+  // for both the pre-match plan and for a live rebuild after a manual or
+  // early substitution changes what's left to schedule.
+  function attachPositionsToEvents(events, startPositions, eligFn){
+    let cur = {...startPositions};
+    return events.map(ev => {
+      const {matchPos: next, ok} = reassignAfterSub(cur, ev.off, ev.on, eligFn);
+      const onPos = Object.keys(next).find(pos => next[pos] === ev.on) || null;
+      const reshuffled = [];
+      Object.keys(cur).forEach(pos => {
+        if(cur[pos] !== next[pos] && next[pos] && next[pos] !== ev.on){
+          reshuffled.push({player: next[pos], newPos: pos});
+        }
+      });
+      const result = {...ev, onPos, reshuffled, feasible: ok};
+      cur = next;
+      return result;
+    });
   }
 
   // Walk a match's kickoff line-up + substitution timeline, attaching a
@@ -1193,13 +1237,19 @@
       const posEntry = Object.entries(positions.kickoffAssignment || {}).find(([,pl]) => pl === name);
       return {name, pos: posEntry ? posEntry[0] : null};
     });
+    const pinnedGK = match.schedule.pinnedGK || null;
+    const fullRoster = [...match.schedule.onFieldAtStart, ...match.schedule.benchAtStart];
+    const outfieldRoster = fullRoster.filter(p => p !== pinnedGK);
     return {
       opponent: match.fixture.opp,
       fixtureDate: match.fixture.date,
       totalMinutes: MATCH_MINUTES,
+      pinnedGK,
+      onFieldCount: pinnedGK ? 6 : 7,
+      outfieldRoster,
       startingSeven,
-      events: positions.events.map(e => ({
-        atMinute: e.atMinute, on: e.on, off: e.off, onPos: e.onPos,
+      events: positions.events.map((e,i) => ({
+        id: 'e'+i, atMinute: e.atMinute, on: e.on, off: e.off, onPos: e.onPos,
         isHalftime: !!e.isHalftime, feasible: e.feasible,
         reshuffled: (e.reshuffled || []).map(r => ({player: r.player, newPos: r.newPos}))
       }))
@@ -1226,19 +1276,20 @@
     } else {
       try{ localStorage.setItem('jakd63-live', newLive ? JSON.stringify(newLive) : ''); }catch(e){}
     }
+    renderAll();
     updateLiveBarDisplay();
-    renderLiveConsole();
-    const season = computeSeason(unavailability);
-    const match = season.results.find(r => r.fixture.n === currentMatch);
-    if(match && document.getElementById('kickoffArea')) renderKickoffArea(match);
   }
 
   function startKickoff(matchNum){
     const snapshot = computeLiveSnapshot(matchNum);
     if(!snapshot) return;
+    const currentPositions = {};
+    snapshot.startingSeven.forEach(p => { if(p.pos) currentPositions[p.pos] = p.name; });
     writeLive({
       matchNum, status:'running', kickoffAt: Date.now(), pausedAt:null, totalPausedMs:0, snapshot,
       onFieldSet: snapshot.startingSeven.map(p => p.name),
+      currentPositions,
+      remainingPlan: snapshot.events.map(e => ({...e})),
       subsLog: [], goals: [], opponentGoals: []
     });
   }
@@ -1352,7 +1403,7 @@
   function addToLiveArray(field, item){
     if(!liveState) return;
     liveState = {...liveState, [field]: [...(liveState[field]||[]), item]};
-    updateLiveBarDisplay(); renderLiveConsole();
+    renderAll();
     if(useFirestore && db){
       liveDocRef().update({[`live.${field}`]: firebase.firestore.FieldValue.arrayUnion(item)})
         .catch(e => { console.error('Sync add failed, falling back to full write:', e); writeLive(liveState); });
@@ -1363,7 +1414,7 @@
   function removeFromLiveArray(field, item){
     if(!liveState) return;
     liveState = {...liveState, [field]: (liveState[field]||[]).filter(x => x !== item)};
-    updateLiveBarDisplay(); renderLiveConsole();
+    renderAll();
     if(useFirestore && db){
       liveDocRef().update({[`live.${field}`]: firebase.firestore.FieldValue.arrayRemove(item)})
         .catch(e => { console.error('Sync remove failed, falling back to full write:', e); writeLive(liveState); });
@@ -1372,28 +1423,127 @@
     }
   }
 
-  function confirmSubFromAlert(){
-    const a = alertQueue[0];
-    if(!a || !liveState || !a.off || !a.on) return;
-    const atMinuteActual = Math.round((getElapsedMs(liveState) / 60000) * 10) / 10;
-    const entry = {idx:a.idx, plannedAt:a.atMinute, atMinuteActual, off:a.off, on:a.on, onPos:a.onPos, reshuffled:a.reshuffled||[], addedAt: Date.now()};
+  // ---- Shared substitution engine: reconstructs real playing time from the
+  // executed history (not the original plan), and rebuilds whatever's left
+  // to schedule whenever a manual or early substitution disrupts the plan.
+  function computeMinutesSoFar(live, uptoT){
+    const minutes = {}, continuousStart = {};
+    const startingOutfield = live.snapshot.startingSeven
+      .filter(p => p.name !== live.snapshot.pinnedGK).map(p => p.name);
+    let onField = new Set(startingOutfield);
+    startingOutfield.forEach(p => continuousStart[p] = 0);
+    const sorted = [...(live.subsLog||[])].sort((a,b) => a.atMinuteActual - b.atMinuteActual);
+    let lastT = 0;
+    const accrue = (t) => { const dt = Math.max(0, t-lastT); onField.forEach(p => minutes[p] = (minutes[p]||0)+dt); lastT = t; };
+    sorted.forEach(s => {
+      if(s.atMinuteActual > uptoT + 1e-6) return;
+      accrue(s.atMinuteActual);
+      onField.delete(s.off); onField.add(s.on);
+      continuousStart[s.on] = s.atMinuteActual;
+    });
+    accrue(uptoT);
+    return {minutes, onField: [...onField], continuousStart};
+  }
 
-    liveState = {
-      ...liveState,
-      onFieldSet: (liveState.onFieldSet||[]).filter(p => p !== a.off).concat([a.on]),
-      subsLog: [...(liveState.subsLog||[]), entry]
-    };
-    updateLiveBarDisplay(); renderLiveConsole();
+  function rebuildRemainingPlan(){
+    if(!liveState) return;
+    const snap = liveState.snapshot;
+    const now = Math.round((getElapsedMs(liveState)/60000)*10)/10;
+    if(snap.totalMinutes - now <= 0.05){
+      liveState = {...liveState, remainingPlan: []};
+      persistRemainingPlan();
+      return;
+    }
+    const {minutes, onField, continuousStart} = computeMinutesSoFar(liveState, now);
+    snap.outfieldRoster.forEach(p => { if(minutes[p]===undefined) minutes[p]=0; });
+    const sim = simulateRotation(snap.outfieldRoster, snap.totalMinutes, snap.onFieldCount, {
+      startT: now, initialOnField: onField, initialMinutes: minutes, initialContinuousStart: continuousStart
+    });
+    const eligFn = snap.pinnedGK ? outfieldPositionsFor : eligiblePositionsFor;
+    const positioned = attachPositionsToEvents(sim.events, liveState.currentPositions, eligFn)
+      .map((e,i) => ({...e, id: 'r'+Date.now()+'-'+i}));
+    liveState = {...liveState, remainingPlan: positioned};
+    persistRemainingPlan();
+  }
+
+  function persistRemainingPlan(){
+    renderAll();
     if(useFirestore && db){
-      const ref = liveDocRef();
-      ref.update({'live.subsLog': firebase.firestore.FieldValue.arrayUnion(entry)}).catch(e => { console.error(e); writeLive(liveState); });
-      ref.update({'live.onFieldSet': firebase.firestore.FieldValue.arrayRemove(a.off)}).catch(e => console.error(e));
-      ref.update({'live.onFieldSet': firebase.firestore.FieldValue.arrayUnion(a.on)}).catch(e => console.error(e));
+      liveDocRef().update({'live.remainingPlan': liveState.remainingPlan}).catch(e => { console.error(e); writeLive(liveState); });
     } else {
       try{ localStorage.setItem('jakd63-live', JSON.stringify(liveState)); }catch(e){}
     }
+  }
+
+  // The one place an actual substitution gets applied to live state,
+  // whichever of the three routes triggered it (scheduled confirm, made
+  // early, or fully manual). Always resolves the real position via the
+  // position engine rather than trusting a possibly-stale precomputed one.
+  function applyLiveSubstitution(off, on, meta){
+    if(!liveState || !off || !on || off === on) return;
+    meta = meta || {};
+    const eligFn = liveState.snapshot.pinnedGK ? outfieldPositionsFor : eligiblePositionsFor;
+    const atMinuteActual = Math.round((getElapsedMs(liveState) / 60000) * 10) / 10;
+    const {matchPos: newPositions, ok} = reassignAfterSub(liveState.currentPositions, off, on, eligFn);
+    const onPos = Object.keys(newPositions).find(pos => newPositions[pos] === on) || null;
+    const reshuffled = [];
+    Object.keys(liveState.currentPositions).forEach(pos => {
+      if(liveState.currentPositions[pos] !== newPositions[pos] && newPositions[pos] && newPositions[pos] !== on){
+        reshuffled.push({player: newPositions[pos], newPos: pos});
+      }
+    });
+    const entry = {
+      plannedAt: meta.plannedAt != null ? meta.plannedAt : atMinuteActual,
+      atMinuteActual, off, on, onPos, reshuffled, feasible: ok,
+      manual: !!meta.manual, early: !!meta.early, addedAt: Date.now()
+    };
+
+    liveState = {
+      ...liveState,
+      onFieldSet: (liveState.onFieldSet||[]).filter(p => p !== off).concat([on]),
+      currentPositions: newPositions,
+      subsLog: [...(liveState.subsLog||[]), entry],
+      remainingPlan: meta.sourceId ? (liveState.remainingPlan||[]).filter(e => e.id !== meta.sourceId) : (liveState.remainingPlan||[])
+    };
+    renderAll();
+    if(useFirestore && db){
+      const ref = liveDocRef();
+      ref.update({'live.subsLog': firebase.firestore.FieldValue.arrayUnion(entry)}).catch(e => { console.error(e); writeLive(liveState); });
+      ref.update({'live.onFieldSet': firebase.firestore.FieldValue.arrayRemove(off)}).catch(e => console.error(e));
+      ref.update({'live.onFieldSet': firebase.firestore.FieldValue.arrayUnion(on)}).catch(e => console.error(e));
+      ref.update({'live.currentPositions': newPositions}).catch(e => console.error(e));
+      if(meta.sourceId) ref.update({'live.remainingPlan': liveState.remainingPlan}).catch(e => console.error(e));
+    } else {
+      try{ localStorage.setItem('jakd63-live', JSON.stringify(liveState)); }catch(e){}
+    }
+
+    // A routine on-time confirm doesn't need a reschedule — only an early
+    // or manual change disrupts the plan enough to warrant rebalancing.
+    if(meta.early || meta.manual) rebuildRemainingPlan();
+  }
+
+  function confirmSubFromAlert(){
+    const a = alertQueue[0];
+    if(!a || !liveState || !a.off || !a.on) return;
+    applyLiveSubstitution(a.off, a.on, {plannedAt: a.atMinute, sourceId: a.id});
     alertQueue.shift();
     renderAlertOverlay();
+  }
+
+  // "Made Early" — coach makes a scheduled change ahead of its planned time.
+  function makeSubEarly(eventId){
+    if(!liveState) return;
+    const ev = (liveState.remainingPlan||[]).find(e => e.id === eventId);
+    if(!ev) return;
+    applyLiveSubstitution(ev.off, ev.on, {plannedAt: ev.atMinute, sourceId: ev.id, early:true});
+  }
+
+  // Fully manual/forced substitution, picked freely by the coach.
+  function confirmManualSub(off, on){
+    if(!liveState || !off || !on) return;
+    if(!(liveState.onFieldSet||[]).includes(off)) return;
+    if((liveState.onFieldSet||[]).includes(on)) return;
+    applyLiveSubstitution(off, on, {manual:true});
   }
   function dismissAlert(){ alertQueue.shift(); renderAlertOverlay(); }
 
@@ -1477,9 +1627,9 @@
       matchNum: liveState.matchNum, opponent: liveState.snapshot.opponent, date: liveState.snapshot.fixtureDate,
       generatedAt: Date.now(), totalMinutes: liveState.snapshot.totalMinutes,
       startingSeven: liveState.snapshot.startingSeven,
-      goals: [...(liveState.goals||[])].sort((a,b) => a.atMinute - b.atMinute),
-      opponentGoals: [...(liveState.opponentGoals||[])].sort((a,b) => a.atMinute - b.atMinute),
-      subs: [...(liveState.subsLog||[])].sort((a,b) => a.atMinuteActual - b.atMinuteActual)
+      goals: [...(liveState.goals||[])],
+      opponentGoals: [...(liveState.opponentGoals||[])],
+      subs: [...(liveState.subsLog||[])]
     };
     matchReports = {...matchReports, [report.matchNum]: report};
     persistReports();
@@ -1487,26 +1637,32 @@
     showReport(report.matchNum);
   }
 
+  function buildReportTimeline(report){
+    const items = [
+      ...report.goals.map(g => ({t:g.atMinute, order:0, html:`<span class="icon">⚽</span><span class="time">${fmtReportTime(g.atMinute)}</span><span><b>Goal</b> — ${g.scorer}${g.assist ? ` <span class="tag">assist: ${g.assist}</span>` : ''}</span>`})),
+      ...report.opponentGoals.map(g => ({t:g.atMinute, order:0, html:`<span class="icon">🥅</span><span class="time">${fmtReportTime(g.atMinute)}</span><span><b>Goal</b> — ${report.opponent}</span>`})),
+      ...report.subs.map(s => ({t:s.atMinuteActual, order:1, html:`<span class="icon">🔁</span><span class="time">${fmtReportTime(s.atMinuteActual)}</span><span><b>Substitution</b> — ${s.off} OFF → ${s.on} ON (${s.onPos ? POSITION_LABEL[s.onPos] : '—'})${s.manual ? ` <span class="tag">manual</span>` : ''}${s.early ? ` <span class="tag">made early</span>` : ''}${s.reshuffled && s.reshuffled.length ? `<br><span class="tag">also: ${s.reshuffled.map(r=>r.player+' → '+POSITION_LABEL[r.newPos]).join(', ')}</span>` : ''}</span>`}))
+    ];
+    items.sort((a,b) => a.t - b.t || a.order - b.order);
+    return items;
+  }
+
   function renderReportHTML(report){
     const startersHtml = report.startingSeven.map(p => `
       <div class="player-row"><div class="name">${p.name}</div><span class="tag">${p.pos ? POSITION_LABEL[p.pos] : '—'}</span></div>
     `).join('');
-    const goalsHtml = report.goals.length
-      ? `<ul class="event-log">${report.goals.map(g => `<li><span class="icon">⚽</span><span class="time">${fmtReportTime(g.atMinute)}</span><span>${g.scorer}${g.assist ? ` <span class="tag">assist: ${g.assist}</span>` : ''}</span></li>`).join('')}</ul>`
-      : `<div class="note-box">No goals recorded.</div>`;
-    const subsHtml = report.subs.length
-      ? `<ul class="event-log">${report.subs.map(s => `<li><span class="icon">🔁</span><span class="time">${fmtReportTime(s.atMinuteActual)}</span><span>${s.off} OFF → ${s.on} ON (${s.onPos ? POSITION_LABEL[s.onPos] : '—'})${s.reshuffled && s.reshuffled.length ? ` <span class="tag">also: ${s.reshuffled.map(r=>r.player+' → '+POSITION_LABEL[r.newPos]).join(', ')}</span>` : ''}</span></li>`).join('')}</ul>`
-      : `<div class="note-box">No substitutions logged.</div>`;
+    const timeline = buildReportTimeline(report);
+    const timelineHtml = timeline.length
+      ? `<ul class="event-log">${timeline.map(item => `<li>${item.html}</li>`).join('')}</ul>`
+      : `<div class="note-box">No goals or substitutions were logged.</div>`;
     return `
       <div class="section-title">📋 Match Report <span class="count">Match ${report.matchNum}</span></div>
       <div class="report-score">${report.goals.length} <span class="opp">– ${report.opponentGoals.length} ${report.opponent}</span></div>
       <div class="report-meta-line">${report.date} · ${report.totalMinutes} minutes played</div>
       <div class="section-title">Starting 7</div>
       ${startersHtml}
-      <div class="section-title">Goals</div>
-      ${goalsHtml}
-      <div class="section-title">Substitutions</div>
-      ${subsHtml}
+      <div class="section-title">Timeline</div>
+      ${timelineHtml}
       <div class="console-actions"><button class="console-btn ghost-btn" id="closeReportBtn">Close report</button></div>
     `;
   }
@@ -1534,7 +1690,7 @@
     const combinedLog = [
       ...goals.map(g => ({t:g.atMinute, html:`<span class="icon">⚽</span><span class="time">${fmtReportTime(g.atMinute)}</span><span>${g.scorer}${g.assist?` <span class="tag">assist: ${g.assist}</span>`:''}</span>`})),
       ...oppGoals.map(g => ({t:g.atMinute, html:`<span class="icon">🥅</span><span class="time">${fmtReportTime(g.atMinute)}</span><span>${liveState.snapshot.opponent} goal</span>`})),
-      ...subs.map(s => ({t:s.atMinuteActual, html:`<span class="icon">🔁</span><span class="time">${fmtReportTime(s.atMinuteActual)}</span><span>${s.off} OFF → ${s.on} ON (${s.onPos?POSITION_LABEL[s.onPos]:'—'})</span>`}))
+      ...subs.map(s => ({t:s.atMinuteActual, html:`<span class="icon">🔁</span><span class="time">${fmtReportTime(s.atMinuteActual)}</span><span>${s.off} OFF → ${s.on} ON (${s.onPos?POSITION_LABEL[s.onPos]:'—'})${s.manual?' <span class="tag">manual</span>':''}${s.early?' <span class="tag">made early</span>':''}</span>`}))
     ].sort((a,b) => a.t - b.t);
     const ended = liveState.status === 'ended';
     const hasReport = !!matchReports[liveState.matchNum];
@@ -1587,17 +1743,17 @@
 
     if(liveState.status === 'running'){
       const elapsedMin = getElapsedMs(liveState) / 60000;
-      liveState.snapshot.events.forEach((ev, idx) => {
-        const warnKey = 'w' + idx, dueKey = 'd' + idx;
+      (liveState.remainingPlan || []).forEach(ev => {
+        const warnKey = 'w' + ev.id, dueKey = 'd' + ev.id;
         if(elapsedMin >= ev.atMinute - 2 && !shownAlertKeys.has(warnKey)){
           shownAlertKeys.add(warnKey);
           const c = buildAlertContent(ev, 'warn');
-          pushAlert({phase:'warn', atMinute: ev.atMinute, title:c.title, bodyHtml:c.bodyHtml});
+          pushAlert({phase:'warn', atMinute: ev.atMinute, id: ev.id, title:c.title, bodyHtml:c.bodyHtml});
         }
         if(elapsedMin >= ev.atMinute && !shownAlertKeys.has(dueKey)){
           shownAlertKeys.add(dueKey);
           const c = buildAlertContent(ev, 'due');
-          pushAlert({phase:'due', atMinute: ev.atMinute, idx, off:ev.off, on:ev.on, onPos:ev.onPos,
+          pushAlert({phase:'due', atMinute: ev.atMinute, id: ev.id, off:ev.off, on:ev.on, onPos:ev.onPos,
             reshuffled: ev.reshuffled, title:c.title, bodyHtml:c.bodyHtml});
         }
       });
@@ -1774,33 +1930,124 @@
     el.innerHTML = html;
   }
 
+  let subTabMode = 'ai'; // 'ai' | 'manual'
+
   function renderTimelineCard(match, positions){
     const el = document.getElementById('timelineCard');
-    let html = `<div class="section-title">Substitution plan <span class="count">${match.schedule.events.length} change${match.schedule.events.length===1?'':'s'}</span></div>`;
-    const outfieldMinuteVals = [...new Set(Object.entries(match.schedule.minutesByPlayer).filter(([p])=>p!==match.schedule.pinnedGK).map(([,v])=>v))];
-    const minutesLine = match.schedule.pinnedGK
-      ? `${match.schedule.pinnedGK} plays the full ${MATCH_MINUTES} min in goal; the other ${outfieldMinuteVals.length ? Object.keys(match.schedule.minutesByPlayer).length-1 : 0} outfield players share <b>${fmtMin(outfieldMinuteVals[0]||0)} min</b> each.`
-      : `Every rostered player gets <b>${fmtMin(outfieldMinuteVals[0]||0)} min</b> out of the ${MATCH_MINUTES}-minute match.`;
-    html += `<div class="note-box">${minutesLine} Incoming players slot into the position they're replacing wherever their eligibility allows; occasionally two or three players rotate positions at once to keep everyone in a role they can actually play.</div>`;
-    if(match.schedule.events.length === 0){
-      html += `<div class="note-box" style="margin-top:8px;">No changes needed — exactly 7 players available, so the same 7 play the full match.</div>`;
+    const isLiveHere = liveState && liveState.matchNum === match.fixture.n && liveState.status !== 'ended';
+
+    let html = `
+      <div class="section-title">Substitutions</div>
+      <div class="sub-tabs">
+        <button class="sub-tab-btn ${subTabMode==='ai'?'active':''}" id="tabAiBtn">🤖 AI Substitutions</button>
+        <button class="sub-tab-btn ${subTabMode==='manual'?'active':''}" id="tabManualBtn">✋ Manual Substitution</button>
+      </div>
+    `;
+
+    if(subTabMode === 'ai'){
+      if(isLiveHere){
+        const plan = liveState.remainingPlan || [];
+        html += `<div class="note-box">This is the live, up-to-date plan for the rest of the match — it automatically rebuilds itself to keep things as fair as possible whenever a substitution is made early or manually.</div>`;
+        if(!plan.length){
+          html += `<div class="note-box" style="margin-top:8px;">No changes left to schedule.</div>`;
+        } else {
+          html += `<ul class="sub-timeline">`;
+          plan.forEach(ev => {
+            const posLabel = ev.onPos ? POSITION_LABEL[ev.onPos] : 'no valid slot';
+            html += `<li>
+              <span class="time">${ev.atMinute}'</span>
+              <span>
+                <span class="arrow-on">↑ ${ev.on} ON</span> → <b>${posLabel}</b>, for
+                <span class="arrow-off">${ev.off} OFF ↓</span>${ev.isHalftime ? ' <span class="tag">at half-time</span>' : ''}
+                ${ev.reshuffled && ev.reshuffled.length ? `<br><span class="tag">also moves: ${ev.reshuffled.map(r=>`${r.player} → ${POSITION_LABEL[r.newPos]}`).join(', ')}</span>` : ''}
+                ${ev.feasible===false ? `<br><span class="tag" style="color:var(--red)">⚠ no eligible slot — manual swap needed</span>` : ''}
+                <br><button class="made-early-btn" data-ev-id="${ev.id}">Made early</button>
+              </span>
+            </li>`;
+          });
+          html += `</ul>`;
+        }
+      } else {
+        const events = match.schedule.events;
+        const outfieldMinuteVals = Object.entries(match.schedule.minutesByPlayer).filter(([p])=>p!==match.schedule.pinnedGK).map(([,v])=>v);
+        const minVal = outfieldMinuteVals.length ? Math.min(...outfieldMinuteVals) : 0;
+        const maxVal = outfieldMinuteVals.length ? Math.max(...outfieldMinuteVals) : 0;
+        const rangeText = (maxVal - minVal < 0.6) ? `<b>${fmtMin(minVal)} min</b> each` : `between <b>${fmtMin(minVal)}–${fmtMin(maxVal)} min</b> each (kept as close to equal as the caps below allow)`;
+        const minutesLine = match.schedule.pinnedGK
+          ? `${match.schedule.pinnedGK} plays the full ${MATCH_MINUTES} min in goal; the other outfield players get ${rangeText}.`
+          : `Every rostered player gets ${rangeText} out of the ${MATCH_MINUTES}-minute match.`;
+        html += `<div class="note-box">${minutesLine} Incoming players slot into the position they're replacing wherever their eligibility allows; occasionally two or three players rotate positions at once to keep everyone in a role they can actually play.</div>`;
+        if(!isLiveHere && liveState && liveState.matchNum === match.fixture.n && liveState.status === 'ended'){
+          html += `<div class="note-box">This match has ended — this is the original pre-match plan. See the Live Match panel below for what actually happened, including any manual or early changes.</div>`;
+        }
+        if(events.length === 0){
+          html += `<div class="note-box" style="margin-top:8px;">No changes needed — exactly 7 players available, so the same 7 play the full match.</div>`;
+        } else {
+          html += `<ul class="sub-timeline">`;
+          positions.events.forEach(ev => {
+            const posLabel = ev.onPos ? POSITION_LABEL[ev.onPos] : 'no valid slot';
+            html += `<li>
+              <span class="time">${ev.atMinute}'</span>
+              <span>
+                <span class="arrow-on">↑ ${ev.on} ON</span> → <b>${posLabel}</b>, for
+                <span class="arrow-off">${ev.off} OFF ↓</span>${ev.isHalftime ? ' <span class="tag">at half-time</span>' : ''}
+                ${ev.reshuffled && ev.reshuffled.length ? `<br><span class="tag">also moves: ${ev.reshuffled.map(r=>`${r.player} → ${POSITION_LABEL[r.newPos]}`).join(', ')}</span>` : ''}
+                ${!ev.feasible ? `<br><span class="tag" style="color:var(--red)">⚠ no eligible slot — manual swap needed</span>` : ''}
+              </span>
+            </li>`;
+          });
+          html += `</ul>`;
+        }
+      }
     } else {
-      html += `<ul class="sub-timeline">`;
-      positions.events.forEach(ev => {
-        const posLabel = ev.onPos ? POSITION_LABEL[ev.onPos] : 'no valid slot';
-        html += `<li>
-          <span class="time">${ev.atMinute}'</span>
-          <span>
-            <span class="arrow-on">↑ ${ev.on} ON</span> → <b>${posLabel}</b>, for
-            <span class="arrow-off">${ev.off} OFF ↓</span>${ev.isHalftime ? ' <span class="tag">at half-time</span>' : ''}
-            ${ev.reshuffled && ev.reshuffled.length ? `<br><span class="tag">also moves: ${ev.reshuffled.map(r=>`${r.player} → ${POSITION_LABEL[r.newPos]}`).join(', ')}</span>` : ''}
-            ${!ev.feasible ? `<br><span class="tag" style="color:var(--red)">⚠ no eligible slot — manual swap needed</span>` : ''}
-          </span>
-        </li>`;
-      });
-      html += `</ul>`;
+      // Manual substitution tab
+      if(!isLiveHere){
+        html += `<div class="note-box">Kick off this match to make a manual substitution — this only applies to a live match in progress.</div>`;
+      } else {
+        const gk = liveState.snapshot.pinnedGK;
+        const onField = (liveState.onFieldSet||[]).filter(p => p !== gk);
+        const bench = (liveState.snapshot.outfieldRoster||[]).filter(p => !(liveState.onFieldSet||[]).includes(p));
+        html += `<div class="note-box">Use this for a forced or early change the coach makes on the spot — it's logged with the time it actually happened, and the rest of the AI plan rebuilds itself around it straight after.</div>`;
+        if(!onField.length || !bench.length){
+          html += `<div class="note-box">Not enough players to make a substitution right now.</div>`;
+        } else {
+          html += `
+            <div class="manual-sub-row">
+              <label>Bring off (on pitch)</label>
+              <select id="manualOffSelect">${onField.map(p => `<option value="${p}">${p}</option>`).join('')}</select>
+            </div>
+            <div class="manual-sub-row">
+              <label>Bring on (bench)</label>
+              <select id="manualOnSelect">${bench.map(p => `<option value="${p}">${p}</option>`).join('')}</select>
+            </div>
+            <button class="kickoff-btn" id="manualSubConfirmBtn" style="width:100%;">Confirm substitution</button>
+          `;
+        }
+      }
     }
+
     el.innerHTML = html;
+    const tabAi = document.getElementById('tabAiBtn'); if(tabAi) tabAi.onclick = () => { subTabMode='ai'; renderAll(); };
+    const tabManual = document.getElementById('tabManualBtn'); if(tabManual) tabManual.onclick = () => { subTabMode='manual'; renderAll(); };
+    el.querySelectorAll('.made-early-btn').forEach(btn => {
+      btn.onclick = () => showConfirm(
+        'Make this substitution early?',
+        'This logs the change right now (not at its originally planned time), and rebuilds the rest of the plan to keep everyone as close to equal time as possible.',
+        'Yes, make it now',
+        () => makeSubEarly(btn.getAttribute('data-ev-id'))
+      );
+    });
+    const manualBtn = document.getElementById('manualSubConfirmBtn');
+    if(manualBtn) manualBtn.onclick = () => {
+      const off = document.getElementById('manualOffSelect').value;
+      const on = document.getElementById('manualOnSelect').value;
+      showConfirm(
+        `Sub ${off} off, ${on} on?`,
+        'This logs the change right now and rebuilds the rest of the plan to keep everyone as close to equal time as possible.',
+        'Confirm substitution',
+        () => confirmManualSub(off, on)
+      );
+    };
   }
 
   function renderSeasonCard(season){
