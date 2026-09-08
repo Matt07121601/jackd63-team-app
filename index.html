@@ -635,14 +635,13 @@
       };
     }
 
-    // Exactly 3 substitution stoppages per half (quarter-marks), plus the
-    // free change at half-time itself — 6 stoppages a match, no more, no
-    // matter how many players need rotating through them. A capped player
-    // (Ted/Zachary) is forced off at whichever of those fixed checkpoints
-    // is the last one that keeps them under their limit, rather than ever
-    // creating an extra unscheduled stoppage — and half-time itself resets
-    // everyone's continuous-minutes clock, since it's a genuine rest break
-    // regardless of whether a player is actually substituted there.
+    // Exactly 6 substitutions for the whole match — one player at a time,
+    // 3 per half, at fixed quarter-mark checkpoints — plus a free change
+    // at half-time itself if needed (no stoppage required there anyway).
+    // A capped player (Ted/Zachary) takes priority for that checkpoint's
+    // one swap if they'd otherwise breach their limit before the next
+    // checkpoint; half-time also resets everyone's continuous-minutes
+    // clock, since it's a genuine rest break whether or not they're subbed.
     const checkStep = 0.25;
     const half = totalMinutes / 2;
     const quarterPoints = (from, to) => [from + (to-from)/4, from + (to-from)/2, from + (to-from)*3/4];
@@ -652,18 +651,21 @@
       .filter(cp => cp > startT + 1e-6 && cp <= totalMinutes + 1e-6);
     let cpIdx = 0;
 
-    function batchRebalance(t, isHalftime){
+    function checkpointSwap(t, isHalftime){
       const nextStop = (cpIdx+1 < checkpoints.length) ? checkpoints[cpIdx+1] : totalMinutes;
-      // First: anyone capped who'd breach their limit before the next
-      // scheduled stoppage has to come off now — no waiting for a
-      // mid-interval moment that isn't one of the fixed 6.
-      let guard1 = 0;
+      // Cap safety is non-negotiable: keep forcing off anyone who'd
+      // otherwise breach their limit before the next checkpoint (it's rare
+      // for more than one player to collide like this in the same spot).
+      // Only if nobody needed forcing does this checkpoint's one swap go
+      // to the single biggest ordinary fairness gap instead.
+      let didForce = false, guard1 = 0;
       while(guard1++ < 10){
-        let forced = null;
+        let forced = null, worstMargin = -Infinity;
         onField.forEach(p => {
           const cap = STINT_CAP_MINUTES[p];
-          if(!cap || forced) return;
-          if(nextStop - continuousStart[p] > cap + 1e-6) forced = p;
+          if(!cap) return;
+          const margin = (nextStop - continuousStart[p]) - cap;
+          if(margin > 1e-6 && margin > worstMargin){ worstMargin = margin; forced = p; }
         });
         if(!forced) break;
         const bench = rosterOrdered.filter(p => !onField.has(p));
@@ -672,19 +674,17 @@
         onField.delete(forced); onField.add(onPlayer);
         continuousStart[onPlayer] = t;
         events.push({atMinute: t, off: forced, on: onPlayer, isHalftime});
+        didForce = true;
       }
-      // Then: ordinary fairness rebalance among whoever's left to swap.
-      let guard2 = 0;
-      while(guard2++ < 20){
-        const bench = rosterOrdered.filter(p => !onField.has(p));
-        if(bench.length === 0) break;
-        const worstOn = [...onField].sort((a,b) => minutes[b]-minutes[a])[0];
-        const bestBench = [...bench].sort((a,b) => minutes[a]-minutes[b])[0];
-        if(minutes[worstOn] - minutes[bestBench] > checkStep + 1e-6){
-          onField.delete(worstOn); onField.add(bestBench);
-          continuousStart[bestBench] = t;
-          events.push({atMinute: t, off: worstOn, on: bestBench, isHalftime});
-        } else break;
+      if(didForce) return;
+      const bench = rosterOrdered.filter(p => !onField.has(p));
+      if(bench.length === 0) return;
+      const worstOn = [...onField].sort((a,b) => minutes[b]-minutes[a])[0];
+      const bestBench = [...bench].sort((a,b) => minutes[a]-minutes[b])[0];
+      if(minutes[worstOn] - minutes[bestBench] > checkStep + 1e-6){
+        onField.delete(worstOn); onField.add(bestBench);
+        continuousStart[bestBench] = t;
+        events.push({atMinute: t, off: worstOn, on: bestBench, isHalftime});
       }
     }
 
@@ -697,7 +697,7 @@
 
       if(cpIdx < checkpoints.length && t >= checkpoints[cpIdx] - 1e-6){
         const isHalftime = Math.abs(checkpoints[cpIdx] - half) < 1e-6;
-        batchRebalance(t, isHalftime);
+        checkpointSwap(t, isHalftime);
         if(isHalftime) onField.forEach(p => { continuousStart[p] = t; });
         cpIdx++;
       }
