@@ -235,6 +235,41 @@
 
   footer.app-footer{max-width:1080px; margin:0 auto; padding:8px 16px 30px; font-size:12px; color:var(--ink-soft); line-height:1.6;}
 
+  /* ---------- Auth gate ---------- */
+  .auth-gate{
+    position:fixed; inset:0; z-index:200;
+    background:var(--pitch); display:flex; align-items:center; justify-content:center; padding:20px;
+  }
+  .auth-gate.hidden{display:none;}
+  .auth-card{
+    background:var(--card); border-radius:20px; padding:32px 26px; max-width:380px; width:100%;
+    box-shadow:0 20px 60px rgba(0,0,0,.35); text-align:center;
+  }
+  .auth-card .kicker{font-size:11px; text-transform:uppercase; letter-spacing:.14em; color:var(--ink-soft); font-family:'Inter'; font-weight:600;}
+  .auth-card h1{font-size:22px; margin:4px 0 22px; color:var(--ink);}
+  .auth-sub{font-size:13.5px; color:var(--ink-soft); margin:0 0 14px;}
+  .auth-role-btn{
+    display:block; width:100%; padding:15px; margin-bottom:10px; border-radius:12px;
+    border:1px solid var(--line); background:var(--bg-alt); color:var(--ink);
+    font-family:'Oswald'; font-size:16px; cursor:pointer;
+  }
+  .auth-role-btn:active{ background:var(--pitch); color:#fff; }
+  .auth-input{
+    width:100%; padding:13px; border-radius:10px; border:1px solid var(--line);
+    background:var(--bg-alt); color:var(--ink); font-size:16px; text-align:center;
+    margin-bottom:10px; box-sizing:border-box;
+  }
+  .auth-error{ color:var(--red); font-size:12.5px; margin-bottom:10px; }
+  .auth-actions{ display:flex; gap:10px; }
+  .auth-back-btn{
+    background:var(--bg-alt); color:var(--ink-soft); border:1px solid var(--line);
+    border-radius:10px; padding:0 18px; font-weight:600; cursor:pointer;
+  }
+
+  /* ---------- Spectator view ---------- */
+  #spectatorApp header.top{ position:relative; }
+  #spectatorApp main{ max-width:640px; margin:0 auto; padding:8px 16px 40px; }
+
   /* ---------- Kickoff control (on fixture card) ---------- */
   .kickoff-btn{
     display:inline-flex; align-items:center; gap:8px;
@@ -403,6 +438,29 @@
 </head>
 <body>
 
+<div class="auth-gate" id="authGate">
+  <div class="auth-card">
+    <span class="kicker">JAKD63 · Team Ops</span>
+    <h1>Matchday Squad Rotation</h1>
+    <div id="authRoleChoice">
+      <p class="auth-sub">Who's viewing?</p>
+      <button class="auth-role-btn" id="authCoachBtn">🧢 Coaching Team</button>
+      <button class="auth-role-btn" id="authSpectatorBtn">👀 Spectators</button>
+    </div>
+    <div id="authPasswordStep" class="hidden">
+      <p class="auth-sub" id="authRoleLabel"></p>
+      <input type="password" id="authPasswordInput" class="auth-input" placeholder="Enter password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" />
+      <div class="auth-error hidden" id="authError">Incorrect password — try again.</div>
+      <div class="auth-actions">
+        <button class="auth-back-btn" id="authBackBtn">Back</button>
+        <button class="kickoff-btn" id="authSubmitBtn" style="flex:1;">Enter</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="coachApp" class="hidden">
+
 <div class="live-bar hidden" id="liveBar">
   <div class="live-bar-inner">
     <div class="live-info">
@@ -499,6 +557,25 @@
   handbook states a different figure — the whole app recalculates from that one number.
 </footer>
 
+</div><!-- /#coachApp -->
+
+<div id="spectatorApp" class="hidden">
+  <header class="top spectator-header">
+    <div class="top-row">
+      <div class="brand">
+        <span class="kicker">JAKD63</span>
+        <h1>Match Day</h1>
+      </div>
+      <div class="theme-toggle" id="themeToggleSpectator" role="button" aria-label="Toggle dark mode">
+        <span>☀️</span><div class="knob"></div><span>🌙</span>
+      </div>
+    </div>
+  </header>
+  <main>
+    <div class="card" id="spectatorContent"></div>
+  </main>
+</div>
+
 <script>
 /* =========================================================================
    1. CONFIG — fill this in with your own free Firebase project to get
@@ -516,6 +593,87 @@
 };
   const FIRESTORE_COLLECTION = "jakd63-roster";
   const FIRESTORE_DOC = "season-2026-27";
+
+/* =========================================================================
+   1b. ACCESS GATE
+   ---------------------------------------------------------------------
+   A lightweight lock, not real security — this is a static page with no
+   server, so anyone who opens the browser's dev tools could read these
+   passwords straight out of the file. It's here to stop casual/accidental
+   access via a shared link, not to withstand someone determined to get in.
+   The chosen role is remembered for this browser tab only (sessionStorage)
+   so it clears itself once the app/browser is actually closed, per the
+   coach's request — closing and reopening the SAME tab without fully
+   quitting the browser may not always clear it, since that's up to how
+   each phone's browser handles backgrounded tabs, not something a webpage
+   can fully control.
+   ========================================================================= */
+  const COACH_PASSWORD = "kB3ar$26-27@NmJaL!*";
+  const SPECTATOR_PASSWORD = "kB3ar$26-27@Sp3cts@!*";
+  let currentRole = null; // 'coach' | 'spectator' | null
+  let pendingRole = null;
+
+  function initAuthGate(){
+    const saved = sessionStorage.getItem('jakd63-role');
+    if(saved === 'coach' || saved === 'spectator'){
+      enterApp(saved);
+    }
+    document.getElementById('authCoachBtn').onclick = () => showPasswordStep('coach');
+    document.getElementById('authSpectatorBtn').onclick = () => showPasswordStep('spectator');
+    document.getElementById('authBackBtn').onclick = () => {
+      document.getElementById('authPasswordStep').classList.add('hidden');
+      document.getElementById('authRoleChoice').classList.remove('hidden');
+      document.getElementById('authError').classList.add('hidden');
+      document.getElementById('authPasswordInput').value = '';
+    };
+    document.getElementById('authSubmitBtn').onclick = submitAuth;
+    document.getElementById('authPasswordInput').addEventListener('keydown', (e) => {
+      if(e.key === 'Enter') submitAuth();
+    });
+  }
+
+  function showPasswordStep(role){
+    pendingRole = role;
+    document.getElementById('authRoleChoice').classList.add('hidden');
+    document.getElementById('authPasswordStep').classList.remove('hidden');
+    document.getElementById('authRoleLabel').textContent = role === 'coach' ? 'Coaching Team password' : 'Spectator password';
+    document.getElementById('authError').classList.add('hidden');
+    const input = document.getElementById('authPasswordInput');
+    input.value = '';
+    input.focus();
+  }
+
+  function submitAuth(){
+    const input = document.getElementById('authPasswordInput');
+    const entered = input.value;
+    const expected = pendingRole === 'coach' ? COACH_PASSWORD : SPECTATOR_PASSWORD;
+    if(entered === expected){
+      try{ sessionStorage.setItem('jakd63-role', pendingRole); }catch(e){}
+      enterApp(pendingRole);
+    } else {
+      document.getElementById('authError').classList.remove('hidden');
+      input.value = '';
+      input.focus();
+    }
+  }
+
+  function enterApp(role){
+    currentRole = role;
+    document.getElementById('authGate').classList.add('hidden');
+    document.getElementById('coachApp').classList.toggle('hidden', role !== 'coach');
+    document.getElementById('spectatorApp').classList.toggle('hidden', role !== 'spectator');
+    renderForRole();
+  }
+
+  // Every place the app used to call renderAll() directly now goes through
+  // this, so the same live Firestore updates correctly drive whichever
+  // view (coach or spectator) this particular browser is actually showing.
+  function renderForRole(){
+    if(currentRole === 'coach') renderAll();
+    else if(currentRole === 'spectator') renderSpectatorAll();
+  }
+
+
 
 /* =========================================================================
    2. DATA — players, fixtures, and the one editable assumption (half length)
@@ -1172,7 +1330,7 @@
     if(!isConfigFilled()){
       setSyncPill('offline');
       loadLocal();
-      renderAll();
+      renderForRole();
       updateBackupUI();
       return;
     }
@@ -1197,7 +1355,7 @@
           liveState = data.live || null;
           matchReports = data.reports || {};
           lastBackup = data.backup || null;
-          renderAll();
+          renderForRole();
           updateLiveBarDisplay();
           updateBackupUI();
         } else if(!snap.metadata.fromCache){
@@ -1213,7 +1371,7 @@
           matchReports = {};
           lastBackup = null;
           ref.set({unavailability:{}, live:null, reports:{}, backup:null}, {merge:true});
-          renderAll();
+          renderForRole();
           updateLiveBarDisplay();
           updateBackupUI();
         }
@@ -1224,7 +1382,7 @@
         useFirestore = false;
         setSyncPill('offline');
         loadLocal();
-        renderAll();
+        renderForRole();
         updateBackupUI();
       });
       window.addEventListener('online', () => { if(useFirestore) setSyncPill('live'); });
@@ -1234,7 +1392,7 @@
       useFirestore = false;
       setSyncPill('offline');
       loadLocal();
-      renderAll();
+      renderForRole();
       updateBackupUI();
     }
   }
@@ -1803,11 +1961,12 @@
   }
 
   function tickLive(){
-    if(!liveState){ updateLiveBarDisplay(); return; }
+    if(!liveState){ updateLiveBarDisplay(); if(currentRole === 'spectator') renderSpectatorAll(); return; }
     const key = liveState.matchNum + ':' + liveState.kickoffAt;
     if(key !== lastLiveKey){ shownAlertKeys = new Set(); alertQueue = []; renderAlertOverlay(); lastLiveKey = key; }
 
     updateLiveBarDisplay();
+    if(currentRole === 'spectator') renderSpectatorAll();
 
     if(liveState.status === 'running'){
       const elapsedMin = getElapsedMs(liveState) / 60000;
@@ -1865,13 +2024,15 @@
     }
     document.documentElement.setAttribute('data-theme', theme);
 
-    const toggle = document.getElementById('themeToggle');
-    if(!toggle) return;
-    toggle.addEventListener('click', () => {
+    const toggleTheme = () => {
       const cur = document.documentElement.getAttribute('data-theme');
       const next = cur === 'dark' ? 'light' : 'dark';
       document.documentElement.setAttribute('data-theme', next);
       try{ localStorage.setItem('jakd63-theme', next); }catch(e){ /* private-browsing storage block — theme still switches for this session */ }
+    };
+    ['themeToggle', 'themeToggleSpectator'].forEach(id => {
+      const toggle = document.getElementById(id);
+      if(toggle) toggle.addEventListener('click', toggleTheme);
     });
   }
 
@@ -2162,8 +2323,60 @@
     renderLiveConsole();
   }
 
+  // ---- Spectator view: read-only, live match only. No tactics, no plans,
+  // no controls — just score, line-up/subs, and goals/assists as logged. ----
+  function renderSpectatorAll(){
+    const el = document.getElementById('spectatorContent');
+    if(!el) return;
+
+    if(!liveState){
+      const season = computeSeason(unavailability);
+      const upcoming = season.results.find(r => !matchReports[r.fixture.n]);
+      el.innerHTML = `
+        <div class="section-title">No match in progress</div>
+        <div class="note-box">This page updates automatically once the coaches kick off — no need to refresh.</div>
+        ${upcoming ? `<div class="fixture-meta" style="margin-top:12px;">Next up: <b>vs ${upcoming.fixture.opp}</b><br>${upcoming.fixture.date} · ${upcoming.fixture.time}<br>${upcoming.fixture.loc}</div>` : ''}
+      `;
+      return;
+    }
+
+    const snap = liveState.snapshot;
+    const goals = liveState.goals || [], oppGoals = liveState.opponentGoals || [], subs = liveState.subsLog || [];
+    const ended = liveState.status === 'ended';
+    const elapsedMs = getElapsedMs(liveState);
+    const clockText = ended ? 'Full time'
+      : liveState.status === 'paused' ? (liveState.pausedForHalftime ? 'Half-time' : 'Paused') + ` · ${fmtClock(elapsedMs)}`
+      : `${fmtClock(elapsedMs)} played`;
+
+    const timeline = [
+      ...goals.map(g => ({t:g.atMinute, html:`<span class="icon">⚽</span><span class="time">${fmtReportTime(g.atMinute)}</span><span>Goal: <b>${g.scorer}</b>${g.assist?`, Assist: <b>${g.assist}</b>`:''}</span>`})),
+      ...oppGoals.map(g => ({t:g.atMinute, html:`<span class="icon">🥅</span><span class="time">${fmtReportTime(g.atMinute)}</span><span>Goal: <b>${snap.opponent}</b></span>`})),
+      ...subs.map(s => ({t:s.atMinuteActual, html:`<span class="icon">🔁</span><span class="time">${fmtReportTime(s.atMinuteActual)}</span><span>${s.off} OFF → ${s.on} ON</span>`}))
+    ].sort((a,b) => a.t - b.t);
+
+    const startingNames = (snap.startingSeven || []).map(p => p.name);
+    const benchNames = (snap.outfieldRoster || []).filter(p => !startingNames.includes(p));
+    const startersHtml = (snap.startingSeven || []).map(p => `
+      <div class="player-row"><div class="name">${p.name}</div><span class="tag">${p.pos ? POSITION_LABEL[p.pos] : '—'}</span></div>
+    `).join('');
+    const benchHtml = benchNames.map(p => `<div class="player-row"><div class="name">${p}</div><span class="tag">sub</span></div>`).join('');
+
+    el.innerHTML = `
+      <div class="section-title">Match ${liveState.matchNum} <span class="count">vs ${snap.opponent}</span></div>
+      <div class="score-strip">${goals.length} <span class="vs">us</span> — ${oppGoals.length} <span class="vs">${snap.opponent}</span></div>
+      <div class="report-meta-line">${clockText}</div>
+      <div class="section-title">Starting line-up</div>
+      ${startersHtml}
+      <div class="section-title">Substitutes</div>
+      ${benchHtml || '<div class="note-box">None named.</div>'}
+      <div class="section-title">Timeline</div>
+      ${timeline.length ? `<ul class="event-log">${timeline.map(i => `<li>${i.html}</li>`).join('')}</ul>` : '<div class="note-box">No goals or substitutions yet.</div>'}
+    `;
+  }
+
   window.__toggleAvail = toggleAvailability;
 
+  initAuthGate();
   initTheme();
   initLiveTimer();
   initFirebase();
