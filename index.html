@@ -220,6 +220,13 @@
   .avail-btn.out{ background:var(--red); border-color:var(--red); color:#fff; }
   .avail-btn:disabled{opacity:.45; cursor:default;}
   .player-row.unavailable{opacity:.55;}
+  .force-start-btn{
+    border:1px solid var(--amber); background:var(--card); color:var(--amber);
+    font-size:11.5px; padding:5px 10px; border-radius:999px; cursor:pointer;
+    font-family:'Inter'; font-weight:600; white-space:nowrap;
+  }
+  .force-start-btn.on{ background:var(--amber); border-color:var(--amber); color:#fff; }
+  .force-start-btn:disabled{opacity:.35; cursor:default;}
 
   .sub-timeline{list-style:none; margin:0; padding:0;}
   .sub-timeline li{
@@ -863,15 +870,15 @@
       };
     }
 
-    // Substitution stoppages during play are capped at 3 per half, at fixed
-    // quarter-mark checkpoints — but those are kept deliberately
-    // conservative (cap-safety or a genuinely large imbalance only), since
-    // most rebalancing should happen for free at half-time instead, where
-    // as many swaps as needed can land in one go with no stoppage cost.
+    // Strictly capped at 3 substitutions per half — 6 checkpoints total (3
+    // per half, at the quarter-marks of that half), each doing at most ONE
+    // swap. No exceptions for half-time: it doesn't get a separate free
+    // batch, since that was producing more total changes than the coach
+    // wants to manage.
     const checkStep = 0.25;
     const half = totalMinutes / 2;
     const quarterPoints = (from, to) => [from + (to-from)/4, from + (to-from)/2, from + (to-from)*3/4];
-    let checkpoints = [...quarterPoints(0, half), half, ...quarterPoints(half, totalMinutes)]
+    let checkpoints = [...quarterPoints(0, half), ...quarterPoints(half, totalMinutes)]
       .map(c => Math.round(c*100)/100);
     checkpoints = [...new Set(checkpoints)].sort((a,b) => a-b)
       .filter(cp => cp > startT + 1e-6 && cp <= totalMinutes + 1e-6);
@@ -880,50 +887,31 @@
 
     function checkpointSwap(t, isHalftime){
       const nextStop = (cpIdx+1 < checkpoints.length) ? checkpoints[cpIdx+1] : totalMinutes;
-      // Cap safety is non-negotiable everywhere, always immediate.
-      let didForce = false, guard1 = 0;
-      while(guard1++ < 10){
-        let forced = null, worstMargin = -Infinity;
-        onField.forEach(p => {
-          const cap = STINT_CAP_MINUTES[p];
-          if(!cap) return;
-          const margin = (nextStop - continuousStart[p]) - cap;
-          if(margin > 1e-6 && margin > worstMargin){ worstMargin = margin; forced = p; }
-        });
-        if(!forced) break;
-        const bench = rosterOrdered.filter(p => !onField.has(p));
-        if(bench.length === 0) break;
+      // At most ONE swap per checkpoint, always — 3 per half is a hard
+      // ceiling with no exceptions. If a capped player (Ted/Zachary) would
+      // otherwise breach their limit before the next checkpoint, they get
+      // this checkpoint's one swap; on the rare chance two of them collide
+      // at once, only the more urgent one is swapped here; the other's cap
+      // gets whatever margin is available at the next stop.
+      let forced = null, worstMargin = -Infinity;
+      onField.forEach(p => {
+        const cap = STINT_CAP_MINUTES[p];
+        if(!cap) return;
+        const margin = (nextStop - continuousStart[p]) - cap;
+        if(margin > 1e-6 && margin > worstMargin){ worstMargin = margin; forced = p; }
+      });
+      const bench = rosterOrdered.filter(p => !onField.has(p));
+      if(bench.length === 0) return;
+      if(forced){
         const onPlayer = [...bench].sort((a,b) => minutes[a]-minutes[b])[0];
         onField.delete(forced); onField.add(onPlayer);
         continuousStart[onPlayer] = t;
         events.push({atMinute: t, off: forced, on: onPlayer, isHalftime});
-        didForce = true;
-      }
-
-      if(isHalftime){
-        // Free change: batch as many swaps as needed here — this is where
-        // most rebalancing should happen, since it costs nothing.
-        let guard2 = 0;
-        while(guard2++ < 20){
-          const bench = rosterOrdered.filter(p => !onField.has(p));
-          if(bench.length === 0) break;
-          const worstOn = [...onField].sort((a,b) => minutes[b]-minutes[a])[0];
-          const bestBench = [...bench].sort((a,b) => minutes[a]-minutes[b])[0];
-          if(minutes[worstOn] - minutes[bestBench] > checkStep + 1e-6){
-            onField.delete(worstOn); onField.add(bestBench);
-            continuousStart[bestBench] = t;
-            events.push({atMinute: t, off: worstOn, on: bestBench, isHalftime});
-          } else break;
-        }
         return;
       }
-
-      if(didForce) return; // this in-play checkpoint's one allowance is used
-      const bench = rosterOrdered.filter(p => !onField.has(p));
-      if(bench.length === 0) return;
       const worstOn = [...onField].sort((a,b) => minutes[b]-minutes[a])[0];
       const bestBench = [...bench].sort((a,b) => minutes[a]-minutes[b])[0];
-      if(minutes[worstOn] - minutes[bestBench] > inPlayThreshold){
+      if(minutes[worstOn] - minutes[bestBench] > checkStep + 1e-6){
         onField.delete(worstOn); onField.add(bestBench);
         continuousStart[bestBench] = t;
         events.push({atMinute: t, off: worstOn, on: bestBench, isHalftime});
@@ -931,16 +919,26 @@
     }
 
     let t = startT, guard = 0;
+    let halftimeCrossed = (startT >= half - 1e-6); // already past it if resuming mid-second-half
     while(t < totalMinutes - 1e-6 && guard < 4000){
       guard++;
       const dt = Math.min(checkStep, totalMinutes - t);
       t = Math.round((t + dt) * 100) / 100;
       onField.forEach(p => { minutes[p] += dt; });
 
+      // Half-time is a genuine rest break for everyone still on the pitch,
+      // whether or not they're actually substituted there — reset their
+      // continuous-minutes clock the moment play crosses it. This is
+      // separate from the substitution checkpoints below (which stay
+      // capped at 3 per half) since a rest doesn't require a stoppage.
+      if(!halftimeCrossed && t >= half - 1e-6){
+        onField.forEach(p => { continuousStart[p] = Math.max(continuousStart[p], half); });
+        halftimeCrossed = true;
+      }
+
       if(cpIdx < checkpoints.length && t >= checkpoints[cpIdx] - 1e-6){
-        const isHalftime = Math.abs(checkpoints[cpIdx] - half) < 1e-6;
+        const isHalftime = false; // no checkpoint sits exactly at half-time anymore
         checkpointSwap(t, isHalftime);
-        if(isHalftime) onField.forEach(p => { continuousStart[p] = t; });
         cpIdx++;
       }
     }
@@ -1337,14 +1335,32 @@
       );
       const rankedOutfield = fairnessSort(outfieldAvailable);
       const outfieldCount = pinnedGK ? Math.min(9, rankedOutfield.length) : Math.min(10, rankedOutfield.length);
-      const outfieldPool = rankedOutfield.slice(0, outfieldCount);
+      let outfieldPool = rankedOutfield.slice(0, outfieldCount);
+      // A coach-forced starter is guaranteed a squad place this week too,
+      // not just a starting position — bump the pool's highest-minutes
+      // player out to make room if they weren't already going to be picked.
+      (forcedStarters[i] || []).forEach(name => {
+        if(outfieldAvailable.includes(name) && !outfieldPool.includes(name)){
+          const withoutWorst = [...outfieldPool].sort((a,b) => state[a].minutes - state[b].minutes).slice(0, -1);
+          outfieldPool = [...withoutWorst, name];
+        }
+      });
 
       const roster = pinnedGK ? [pinnedGK, ...outfieldPool] : outfieldPool;
       const rested = PLAYERS.filter(p => !roster.includes(p) && !unavailable.includes(p));
 
       let orderedRoster, startersPick, subsPick;
       if(pinnedGK){
-        const built = buildPinnedSquad(pinnedGK, outfieldPool, null);
+        const forcedForThisMatch = (forcedStarters[i] || []).filter(p => outfieldPool.includes(p));
+        let preferredStarters = null;
+        if(forcedForThisMatch.length){
+          const rest = outfieldPool.filter(p => !forcedForThisMatch.includes(p)).sort((a,b) => {
+            const d = state[a].started - state[b].started;
+            return d !== 0 ? d : a.localeCompare(b);
+          });
+          preferredStarters = [...forcedForThisMatch, ...rest].slice(0, 6);
+        }
+        const built = buildPinnedSquad(pinnedGK, outfieldPool, preferredStarters);
         orderedRoster = built.orderedRoster; startersPick = built.startersPick; subsPick = built.subsPick;
       } else {
         // total blackout: no keeper-capable player available at all — degrade
@@ -1383,6 +1399,7 @@
    4. STATE + PERSISTENCE (Firestore if configured, else localStorage)
    ========================================================================= */
   let unavailability = {}; // { matchNumber: [names] }
+  let forcedStarters = {}; // { matchNumber: [names] } — coach-forced starting XI overrides
   let currentMatch = 1;
   let liveState = null; // {matchNum, status:'running'|'paused'|'ended', kickoffAt, pausedAt, totalPausedMs, snapshot, onFieldSet, subsLog, goals, opponentGoals}
   let matchReports = {}; // { matchNumber: reportObject } — persists after a live session ends
@@ -1438,6 +1455,10 @@
     try{
       teamLogo = localStorage.getItem('jakd63-logo') || null;
     }catch(e){ teamLogo = null; }
+    try{
+      const rawForced = localStorage.getItem('jakd63-forced-starters');
+      forcedStarters = rawForced ? JSON.parse(rawForced) : {};
+    }catch(e){ forcedStarters = {}; }
   }
   function saveLocal(){
     localStorage.setItem('jakd63-unavailability', JSON.stringify(unavailability));
@@ -1558,6 +1579,7 @@
           matchReports = data.reports || {};
           lastBackup = data.backup || null;
           teamLogo = data.teamLogo || null;
+          forcedStarters = data.forcedStarters || {};
           renderForRole();
           updateLiveBarDisplay();
           updateBackupUI();
@@ -1575,7 +1597,8 @@
           matchReports = {};
           lastBackup = null;
           teamLogo = null;
-          ref.set({unavailability:{}, live:null, reports:{}, backup:null, teamLogo:null}, {merge:true});
+          forcedStarters = {};
+          ref.set({unavailability:{}, live:null, reports:{}, backup:null, teamLogo:null, forcedStarters:{}}, {merge:true});
           renderForRole();
           updateLiveBarDisplay();
           updateBackupUI();
@@ -1617,6 +1640,25 @@
       // onSnapshot will re-render with the confirmed server state
     } else {
       saveLocal();
+      renderAll();
+    }
+  }
+
+  // Lets a coach insist a specific player starts a specific (not-yet-played)
+  // match, on the pitch at kick-off rather than left on the bench — total
+  // minutes stay exactly as fair as before, this only changes WHO happens
+  // to be in the on-field 6/7 at the very start versus coming on later.
+  function toggleForcedStarter(matchNum, name){
+    const key = String(matchNum);
+    const list = forcedStarters[key] ? [...forcedStarters[key]] : [];
+    const idx = list.indexOf(name);
+    if(idx >= 0) list.splice(idx,1); else list.push(name);
+    forcedStarters = {...forcedStarters, [key]: list};
+
+    if(useFirestore && db){
+      db.collection(FIRESTORE_COLLECTION).doc(FIRESTORE_DOC).set({forcedStarters}, {merge:true});
+    } else {
+      try{ localStorage.setItem('jakd63-forced-starters', JSON.stringify(forcedStarters)); }catch(e){}
       renderAll();
     }
   }
@@ -2445,13 +2487,21 @@
   function playerRow(name, match, opts){
     const isUnavailable = match.unavailable && match.unavailable.includes(name);
     const canToggle = !match.fixed;
+    const forceStartBtn = opts.showForceStart ? `
+        <button class="force-start-btn ${opts.isForced ? 'on' : ''}" ${opts.canForceStart ? '' : 'disabled'}
+          onclick="window.__toggleForceStart(${match.fixture.n}, '${name}')">
+          ${opts.isForced ? '⭐ Forced to start' : '⭐ Force start'}
+        </button>` : '';
     return `
       <div class="player-row ${isUnavailable ? 'unavailable' : ''}">
         <div class="name">${name} ${opts.tag ? `<span class="tag">${opts.tag}</span>` : ''}</div>
-        <button class="avail-btn ${isUnavailable ? 'out' : ''}" ${canToggle ? '' : 'disabled'}
-          onclick="window.__toggleAvail(${match.fixture.n}, '${name}')">
-          ${isUnavailable ? 'Unavailable' : 'Mark unavailable'}
-        </button>
+        <div style="display:flex; gap:6px; align-items:center;">
+          ${forceStartBtn}
+          <button class="avail-btn ${isUnavailable ? 'out' : ''}" ${canToggle ? '' : 'disabled'}
+            onclick="window.__toggleAvail(${match.fixture.n}, '${name}')">
+            ${isUnavailable ? 'Unavailable' : 'Mark unavailable'}
+          </button>
+        </div>
       </div>`;
   }
 
@@ -2468,15 +2518,22 @@
       html += playerRow(n, match, {tag});
     });
 
+    const canForceStart = !match.fixed && !(liveState && liveState.matchNum === match.fixture.n);
+    const forcedList = forcedStarters[String(match.fixture.n)] || [];
     html += `<div class="section-title">Bench <span class="count">${match.schedule.benchAtStart.length} substitute${match.schedule.benchAtStart.length===1?'':'s'}</span></div>`;
-    match.schedule.benchAtStart.forEach(n => html += playerRow(n, match, {tag:'sub · plays ' + eligiblePositionsFor(n).map(p=>p).join('/')}));
+    match.schedule.benchAtStart.forEach(n => html += playerRow(n, match, {
+      tag:'sub · plays ' + eligiblePositionsFor(n).map(p=>p).join('/'),
+      showForceStart:true, canForceStart, isForced: forcedList.includes(n)
+    }));
 
     const restedList = match.fixed ? match.rested : [...match.rested];
     html += `<div class="section-title">Not in this matchday squad <span class="count">${restedList.length + (match.unavailable?match.unavailable.length:0)}</span></div>`;
     if(restedList.length === 0 && (!match.unavailable || match.unavailable.length===0)){
       html += `<div class="note-box">Everyone is in the squad this week.</div>`;
     }
-    restedList.forEach(n => html += playerRow(n, match, {tag:'resting — fairness rotation'}));
+    restedList.forEach(n => html += playerRow(n, match, {
+      tag:'resting — fairness rotation', showForceStart:true, canForceStart, isForced: forcedList.includes(n)
+    }));
     if(match.unavailable) match.unavailable.forEach(n => html += playerRow(n, match, {tag:'marked unavailable'}));
 
     el.innerHTML = html;
@@ -2765,6 +2822,7 @@
   }
 
   window.__toggleAvail = toggleAvailability;
+  window.__toggleForceStart = toggleForcedStarter;
 
   initAuthGate();
   initTheme();
