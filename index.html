@@ -19,8 +19,8 @@
     --line:#D3DCC9;
     --ink:#182016;
     --ink-soft:#516052;
-    --pitch:#1B4332;
-    --pitch-light:#2D6A4F;
+    --pitch:#1B5E20;
+    --pitch-light:#2E7D32;
     --amber:#C97C1F;
     --amber-soft:#F3E1C4;
     --red:#B3432A;
@@ -34,8 +34,8 @@
     --line:#25392A;
     --ink:#E9EFE6;
     --ink-soft:#9DB09D;
-    --pitch:#63C08A;
-    --pitch-light:#3E8F63;
+    --pitch:#4CAF50;
+    --pitch-light:#43A047;
     --amber:#E3A552;
     --amber-soft:#3A2E18;
     --red:#E38668;
@@ -76,7 +76,26 @@
     pointer-events:none;
   }
   .top-row{display:flex; align-items:center; justify-content:space-between; gap:12px;}
-  .brand{display:flex; flex-direction:column; gap:2px;}
+  .brand{display:flex; flex-direction:row; align-items:center; gap:12px;}
+  .brand .kicker{display:block;}
+
+  .logo-slot{
+    position:relative; width:52px; height:52px; border-radius:14px;
+    background:rgba(255,255,255,.14); border:1px solid rgba(255,255,255,.28);
+    display:flex; align-items:center; justify-content:center; flex:0 0 auto; overflow:hidden;
+    cursor:pointer;
+  }
+  .logo-slot.logo-slot-readonly{ cursor:default; }
+  .logo-slot img{ width:100%; height:100%; object-fit:cover; }
+  .logo-placeholder{ font-size:24px; opacity:.85; }
+  .logo-file-input{
+    position:absolute; inset:0; opacity:0; cursor:pointer; width:100%; height:100%;
+  }
+  .logo-edit-badge{
+    position:absolute; bottom:-2px; right:-2px; background:var(--amber); color:#3a2e0a;
+    border-radius:999px; width:18px; height:18px; display:flex; align-items:center; justify-content:center;
+    font-size:10px; pointer-events:none; border:2px solid var(--pitch);
+  }
   .brand .kicker{font-size:11px; text-transform:uppercase; letter-spacing:.14em; opacity:.75;}
   .brand h1{font-size:26px; margin:0; font-weight:600;}
   .theme-toggle{
@@ -113,7 +132,7 @@
     background:#C97C1F; border-color:#C97C1F; color:#fff; font-weight:600;
     white-space:normal; line-height:1.4; border-radius:12px; padding:8px 12px;
   }
-  .sync-dot{width:7px; height:7px; border-radius:50%; background:#63C08A;}
+  .sync-dot{width:7px; height:7px; border-radius:50%; background:#4CAF50;}
   .sync-dot.local{background:var(--amber);}
 
   .test-bar{
@@ -213,7 +232,7 @@
   }
   .sub-timeline .arrow-on{color:#2f8f5c; font-weight:600;}
   .sub-timeline .arrow-off{color:var(--red); font-weight:600;}
-  [data-theme="dark"] .sub-timeline .arrow-on{color:#63C08A;}
+  [data-theme="dark"] .sub-timeline .arrow-on{color:#4CAF50;}
 
   .warning-box{
     background:var(--amber-soft); border:1px solid var(--amber); color:var(--amber);
@@ -390,6 +409,7 @@
   .console-btn.goal{background:var(--pitch);}
   .console-btn.opp-goal{background:var(--amber);}
   .console-btn.report{background:var(--pitch-light);}
+  .console-btn.award{background:#8B6F1F;}
   .console-btn.ghost-btn{background:var(--bg-alt); color:var(--ink-soft); font-family:'Inter'; font-size:12.5px; font-weight:600; padding:9px 14px;}
   .score-strip{
     display:flex; align-items:baseline; gap:10px; font-family:'Oswald'; font-size:26px; margin:6px 0 4px;
@@ -433,6 +453,26 @@
   .manual-sub-row select{
     width:100%; padding:10px; border-radius:9px; border:1px solid var(--line);
     background:var(--card); color:var(--ink); font-size:14px;
+  }
+
+  /* ---------- Main view tabs (Matches / Stats) ---------- */
+  .main-tabs{
+    max-width:1080px; margin:0 auto; padding:12px 16px 0; display:flex; gap:8px;
+  }
+  .main-tab-btn{
+    padding:9px 16px; border-radius:10px 10px 0 0; border:1px solid var(--line); border-bottom:none;
+    background:var(--bg-alt); color:var(--ink-soft); font-family:'Oswald'; font-size:14px; cursor:pointer;
+  }
+  .main-tab-btn.active{ background:var(--card); color:var(--pitch); font-weight:600; }
+
+  /* ---------- Stats table ---------- */
+  table.stats-table{ width:100%; border-collapse:collapse; font-size:13.5px; }
+  table.stats-table th, table.stats-table td{ text-align:left; padding:9px 8px; border-bottom:1px solid var(--line); }
+  table.stats-table th{ color:var(--ink-soft); font-weight:600; font-size:11.5px; text-transform:uppercase; letter-spacing:.04em; }
+  table.stats-table td.num{ text-align:center; font-variant-numeric:tabular-nums; font-weight:600; }
+  .top-scorer-badge{
+    display:inline-block; margin-left:6px; background:var(--amber-soft); color:var(--amber);
+    font-size:10.5px; font-weight:700; padding:2px 7px; border-radius:999px; white-space:nowrap;
   }
 </style>
 </head>
@@ -517,8 +557,16 @@
 <header class="top">
   <div class="top-row">
     <div class="brand">
-      <span class="kicker">JAKD63 · Team Ops</span>
-      <h1>Matchday Squad Rotation</h1>
+      <div class="logo-slot" id="logoSlotCoach">
+        <img id="teamLogoImgCoach" class="hidden" alt="Team logo" />
+        <span class="logo-placeholder" id="logoPlaceholderCoach">🛡️</span>
+        <input type="file" id="logoFileInput" accept="image/*" class="logo-file-input" />
+        <span class="logo-edit-badge">✏️</span>
+      </div>
+      <div>
+        <span class="kicker">JAKD63 · Team Ops</span>
+        <h1>Matchday Squad Rotation</h1>
+      </div>
     </div>
     <div class="theme-toggle" id="themeToggle" role="button" aria-label="Toggle dark mode">
       <span>☀️</span><div class="knob"></div><span>🌙</span>
@@ -533,12 +581,17 @@
   </div>
 </header>
 
+  <div class="main-tabs">
+    <button class="main-tab-btn active" id="mainTabMatches">📅 Matches</button>
+    <button class="main-tab-btn" id="mainTabStats">📊 Stats</button>
+  </div>
+
 <div class="match-strip" id="matchStrip"></div>
 
 <main>
   <div class="card hidden" id="liveConsoleCard"></div>
   <div class="card hidden" id="reportCard"></div>
-  <div class="grid">
+  <div class="grid" id="matchesView">
     <div>
       <div class="card" id="fixtureCard"></div>
       <div class="card" id="squadCard"></div>
@@ -547,6 +600,9 @@
       <div class="card" id="timelineCard"></div>
       <div class="card" id="seasonCard"></div>
     </div>
+  </div>
+  <div class="card hidden" id="statsView">
+    <div id="statsContent"></div>
   </div>
 </main>
 
@@ -563,8 +619,14 @@
   <header class="top spectator-header">
     <div class="top-row">
       <div class="brand">
-        <span class="kicker">JAKD63</span>
-        <h1>Match Day</h1>
+        <div class="logo-slot logo-slot-readonly">
+          <img id="teamLogoImgSpectator" class="hidden" alt="Team logo" />
+          <span class="logo-placeholder" id="logoPlaceholderSpectator">🛡️</span>
+        </div>
+        <div>
+          <span class="kicker">JAKD63</span>
+          <h1>Match Day</h1>
+        </div>
       </div>
       <div class="theme-toggle" id="themeToggleSpectator" role="button" aria-label="Toggle dark mode">
         <span>☀️</span><div class="knob"></div><span>🌙</span>
@@ -583,14 +645,14 @@
       LOCAL MODE (saved to this browser only via localStorage) so it's
       still fully usable right now. See the chat reply for setup steps.
    ========================================================================= */
- const firebaseConfig = {
-  apiKey: "AIzaSyCf_KbBhG9GH8GESPordl2XdkG7yfb2qwk",
-  authDomain: "jackd63-team.firebaseapp.com",
-  projectId: "jackd63-team",
-  storageBucket: "jackd63-team.firebasestorage.app",
-  messagingSenderId: "226421653847",
-  appId: "1:226421653847:web:3cc8421c4e0ec6f925fe12"
-};
+  const firebaseConfig = {
+    apiKey: "REPLACE_ME",
+    authDomain: "REPLACE_ME.firebaseapp.com",
+    projectId: "REPLACE_ME",
+    storageBucket: "REPLACE_ME.appspot.com",
+    messagingSenderId: "REPLACE_ME",
+    appId: "REPLACE_ME"
+  };
   const FIRESTORE_COLLECTION = "jakd63-roster";
   const FIRESTORE_DOC = "season-2026-27";
 
@@ -690,24 +752,32 @@
   const DEF_SLOTS = ["CD","RD","LD"];
   const MID_SLOTS = ["CM","RM","LM"];
 
-  // Eligibility, built from the coach's per-player position notes.
-  // "defender"/"midfielder"/"winger"/"forward" (general) map onto any slot in
-  // that family; specific roles (e.g. Roman = centre defender only) are kept tight.
+  // Firmly pinned eligibility, effective from Match 3 onward, per the coach's
+  // list. Three players (Ted, Zachary, Raf) can play either a back or a mid
+  // role — once one of them is actually placed in a match, they're locked to
+  // that row (back or mid) for the rest of that match; see rowLockedEligFn.
   const PLAYER_POSITIONS = {
-    Bert:    ["GK", ...DEF_SLOTS],
-    Callum:  ["GK", ...DEF_SLOTS],
-    Theo:    [...DEF_SLOTS],
-    Cruz:    [...MID_SLOTS],                 // midfielder / winger / forward
-    Alfie:   [...MID_SLOTS, ...DEF_SLOTS],    // midfielder / winger / defence
-    Arlo:    [...MID_SLOTS, ...DEF_SLOTS],    // midfielder / forward / defender
-    Raf:     [...MID_SLOTS, ...DEF_SLOTS],    // midfielder / forward / defender
-    Roman:   ["CD"],                          // centre defender only
-    Zachary: ["GK","CM"],                     // goalkeeper / forward
-    Elliott: ["GK", ...MID_SLOTS],            // goalkeeper / forward / midfielder
-    Tommy:   [...DEF_SLOTS],
-    Ted:     [...MID_SLOTS],                  // Teddy
-    Henry:   [...DEF_SLOTS, ...MID_SLOTS]     // defender / midfielder
+    Callum:  ["GK"],                    // primary goalkeeper
+    Bert:    ["GK"],                    // reserve goalkeeper only, if Callum is unavailable
+    Tommy:   ["CD"],                    // centre back
+    Theo:    ["LD"],                    // left back
+    Ted:     ["RD","RM"],               // right back, or right mid
+    Henry:   ["CM","RM","LM"],          // centre / right / left mid
+    Elliott: ["RM","CM"],               // right mid, or centre mid
+    Zachary: ["CD","CM"],               // centre back, or centre mid
+    Raf:     ["CD","CM"],               // centre back, or centre mid
+    Roman:   ["CD"],                    // centre back only
+    Arlo:    ["RM"],                    // right mid
+    Cruz:    ["LM","CM"],               // left mid, or centre mid
+    Alfie:   ["LM"]                     // left mid
   };
+  // Players whose two listed positions span both the back row and the mid
+  // row — everyone else's full eligibility already sits in a single row.
+  const DUAL_ROW_PLAYERS = ["Ted","Zachary","Raf"];
+  function rowOfPosition(pos){
+    if(pos === 'GK') return 'gk';
+    return DEF_SLOTS.includes(pos) ? 'back' : 'mid';
+  }
 
   // ASSUMPTION — flagged in footer above. Change this if your handbook differs.
   const HALF_MINUTES = 25;
@@ -793,13 +863,11 @@
       };
     }
 
-    // Exactly 6 substitutions for the whole match — one player at a time,
-    // 3 per half, at fixed quarter-mark checkpoints — plus a free change
-    // at half-time itself if needed (no stoppage required there anyway).
-    // A capped player (Ted/Zachary) takes priority for that checkpoint's
-    // one swap if they'd otherwise breach their limit before the next
-    // checkpoint; half-time also resets everyone's continuous-minutes
-    // clock, since it's a genuine rest break whether or not they're subbed.
+    // Substitution stoppages during play are capped at 3 per half, at fixed
+    // quarter-mark checkpoints — but those are kept deliberately
+    // conservative (cap-safety or a genuinely large imbalance only), since
+    // most rebalancing should happen for free at half-time instead, where
+    // as many swaps as needed can land in one go with no stoppage cost.
     const checkStep = 0.25;
     const half = totalMinutes / 2;
     const quarterPoints = (from, to) => [from + (to-from)/4, from + (to-from)/2, from + (to-from)*3/4];
@@ -808,14 +876,11 @@
     checkpoints = [...new Set(checkpoints)].sort((a,b) => a-b)
       .filter(cp => cp > startT + 1e-6 && cp <= totalMinutes + 1e-6);
     let cpIdx = 0;
+    const inPlayThreshold = (totalMinutes / R) * 1.5;
 
     function checkpointSwap(t, isHalftime){
       const nextStop = (cpIdx+1 < checkpoints.length) ? checkpoints[cpIdx+1] : totalMinutes;
-      // Cap safety is non-negotiable: keep forcing off anyone who'd
-      // otherwise breach their limit before the next checkpoint (it's rare
-      // for more than one player to collide like this in the same spot).
-      // Only if nobody needed forcing does this checkpoint's one swap go
-      // to the single biggest ordinary fairness gap instead.
+      // Cap safety is non-negotiable everywhere, always immediate.
       let didForce = false, guard1 = 0;
       while(guard1++ < 10){
         let forced = null, worstMargin = -Infinity;
@@ -834,12 +899,31 @@
         events.push({atMinute: t, off: forced, on: onPlayer, isHalftime});
         didForce = true;
       }
-      if(didForce) return;
+
+      if(isHalftime){
+        // Free change: batch as many swaps as needed here — this is where
+        // most rebalancing should happen, since it costs nothing.
+        let guard2 = 0;
+        while(guard2++ < 20){
+          const bench = rosterOrdered.filter(p => !onField.has(p));
+          if(bench.length === 0) break;
+          const worstOn = [...onField].sort((a,b) => minutes[b]-minutes[a])[0];
+          const bestBench = [...bench].sort((a,b) => minutes[a]-minutes[b])[0];
+          if(minutes[worstOn] - minutes[bestBench] > checkStep + 1e-6){
+            onField.delete(worstOn); onField.add(bestBench);
+            continuousStart[bestBench] = t;
+            events.push({atMinute: t, off: worstOn, on: bestBench, isHalftime});
+          } else break;
+        }
+        return;
+      }
+
+      if(didForce) return; // this in-play checkpoint's one allowance is used
       const bench = rosterOrdered.filter(p => !onField.has(p));
       if(bench.length === 0) return;
       const worstOn = [...onField].sort((a,b) => minutes[b]-minutes[a])[0];
       const bestBench = [...bench].sort((a,b) => minutes[a]-minutes[b])[0];
-      if(minutes[worstOn] - minutes[bestBench] > checkStep + 1e-6){
+      if(minutes[worstOn] - minutes[bestBench] > inPlayThreshold){
         onField.delete(worstOn); onField.add(bestBench);
         continuousStart[bestBench] = t;
         events.push({atMinute: t, off: worstOn, on: bestBench, isHalftime});
@@ -920,13 +1004,34 @@
   // is only ever matched against the 6 outfield slots, never GK.
   function outfieldPositionsFor(name){ return eligiblePositionsFor(name).filter(p => p !== 'GK'); }
 
+  // Wraps an eligibility function so that a dual-row player (Ted, Zachary,
+  // Raf — the only three whose two listed positions span both the back row
+  // and the mid row) gets locked to whichever row they're first actually
+  // placed in, for the rest of the match. Lateral moves within that same
+  // row stay fully available; every other player's eligibility already
+  // sits in one row, so this has no effect on them. `seed` lets a live
+  // match resume with locks already established earlier in that game.
+  function makeRowLockedEligFn(baseEligFn, seed){
+    const locked = {...(seed || {})};
+    const fn = (player) => (locked[player] ? [locked[player]] : baseEligFn(player));
+    fn.lock = (player, pos) => {
+      if(DUAL_ROW_PLAYERS.includes(player) && !locked[player]) locked[player] = pos;
+    };
+    fn.lockedMap = locked;
+    return fn;
+  }
+
   // Shortest augmenting path (BFS) from `player` to a free position, through
   // the eligibility graph — this finds the FEWEST other players that need to
   // change position to fit the new player in. Mutates matchPos on success.
   function augmentPath(player, matchPos, eligFn){
     eligFn = eligFn || eligiblePositionsFor;
     for(const pos of eligFn(player)){
-      if(!matchPos[pos]){ matchPos[pos] = player; return true; } // direct fit, 0 disruption
+      if(!matchPos[pos]){
+        matchPos[pos] = player;
+        if(eligFn.lock) eligFn.lock(player, pos);
+        return true;
+      } // direct fit, 0 disruption
     }
     const visitedPos = new Set();
     const parent = {}; // pos -> {via: playerMovedIn, prevPos: pos|null}
@@ -952,6 +1057,7 @@
     while(pos !== null){
       const {via, prevPos} = parent[pos];
       matchPos[pos] = via;
+      if(eligFn.lock) eligFn.lock(via, pos);
       pos = prevPos;
     }
     return true;
@@ -1011,7 +1117,8 @@
   function computeMatchPositions(match){
     const sched = match.schedule;
     let kickoff;
-    const eligFn = sched.pinnedGK ? outfieldPositionsFor : eligiblePositionsFor;
+    const baseEligFn = sched.pinnedGK ? outfieldPositionsFor : eligiblePositionsFor;
+    const eligFn = makeRowLockedEligFn(baseEligFn);
     if(sched.pinnedGK){
       const others = sched.onFieldAtStart.filter(p => p !== sched.pinnedGK);
       const othersAssign = assignPositions(others, eligFn);
@@ -1114,7 +1221,63 @@
       };
     }
 
+    // Reconstructs REAL minutes-per-player from a saved match report's
+    // actual substitution history — not a simulation, the real timeline.
+    function minutesFromReport(report){
+      const minutes = {};
+      const gk = (report.startingSeven||[]).find(p => p.pos === 'GK');
+      const startingOutfield = (report.startingSeven||[]).filter(p => p.pos !== 'GK').map(p=>p.name);
+      const onField = new Set(startingOutfield);
+      startingOutfield.forEach(p => { minutes[p] = 0; });
+      if(gk) minutes[gk.name] = report.totalMinutes;
+      const sorted = [...(report.subs||[])].sort((a,b) => a.atMinuteActual - b.atMinuteActual);
+      let lastT = 0;
+      const accrue = (t) => { const dt = Math.max(0, t-lastT); onField.forEach(p => { minutes[p] = (minutes[p]||0)+dt; }); lastT = t; };
+      sorted.forEach(s => {
+        accrue(Math.min(s.atMinuteActual, report.totalMinutes));
+        onField.delete(s.off); onField.add(s.on);
+        if(minutes[s.on] === undefined) minutes[s.on] = 0;
+      });
+      accrue(report.totalMinutes);
+      return minutes;
+    }
+    // Rebuilds a match's roster/starters/bench/schedule straight from its
+    // saved report — this is what lets an already-played match stay fixed
+    // (real personnel, real minutes, real substitution times) regardless
+    // of any later improvement to the planning algorithm.
+    function scheduleFromReport(report){
+      const gk = (report.startingSeven||[]).find(p => p.pos === 'GK');
+      const starters = (report.startingSeven||[]).map(p => p.name);
+      const onPlayers = (report.subs||[]).map(s => s.on);
+      const roster = [...new Set([...starters, ...onPlayers])];
+      const subsBench = roster.filter(p => !starters.includes(p));
+      const minutesByPlayer = minutesFromReport(report);
+      const events = [...(report.subs||[])].sort((a,b) => a.atMinuteActual - b.atMinuteActual).map(s => ({
+        atMinute: s.atMinuteActual, off: s.off, on: s.on, onPos: s.onPos,
+        reshuffled: s.reshuffled || [], isHalftime:false, feasible: s.feasible !== false
+      }));
+      const schedule = {
+        onFieldAtStart: starters, benchAtStart: subsBench, events, minutesByPlayer,
+        pinnedGK: gk ? gk.name : null, rosterSize: roster.length, capWarnings: [], blockLen: 0
+      };
+      return {schedule, roster, starters, subs: subsBench};
+    }
+
     // --- Match 1: personnel fixed by the coach, and the coach wants Callum in goal ---
+    // If Match 1 has actually been played and saved, that real record is
+    // used instead — this is what stops the theoretical simulation from
+    // ever drifting away from what genuinely happened.
+    if(matchReports[1]){
+      const {schedule, roster, starters, subs} = scheduleFromReport(matchReports[1]);
+      applyState(1, roster, starters, schedule, schedule.pinnedGK);
+      results.push({
+        fixture: FIXTURES[0], roster, starters, subs,
+        rested: PLAYERS.filter(p => !roster.includes(p)), unavailable:[], schedule,
+        fixed:true, warning:null,
+        gkNote: schedule.pinnedGK ? `${schedule.pinnedGK} played the full match in goal.` : null,
+        capWarnings: []
+      });
+    } else {
     const m1full = [...MATCH1_STARTERS, ...MATCH1_SUBS];
     const m1GK = "Callum"; // Callum is the permanent goalkeeper
     const m1Outfield = m1full.filter(p => p !== m1GK);
@@ -1128,9 +1291,24 @@
       fixed:true, warning:null, gkNote:`${m1GK} plays the full match in goal and won't be rotated off.`,
       capWarnings: sched1.capWarnings || []
     });
+    }
 
     // --- Matches 2-25: fairness engine + goalkeeper policy ---
     for(let i=2;i<=25;i++){
+      if(matchReports[i]){
+        // Already played and saved — use the real record, not a re-simulation.
+        const {schedule, roster, starters, subs} = scheduleFromReport(matchReports[i]);
+        applyState(i, roster, starters, schedule, schedule.pinnedGK);
+        results.push({
+          fixture: FIXTURES[i-1], roster, starters, subs,
+          rested: PLAYERS.filter(p => !roster.includes(p) && !(unavailabilityMap[i]||[]).includes(p)),
+          unavailable: unavailabilityMap[i] || [], schedule,
+          fixed:false, warning:null,
+          gkNote: schedule.pinnedGK ? `${schedule.pinnedGK} played the full match in goal.` : null,
+          capWarnings: []
+        });
+        continue;
+      }
       const unavailable = (unavailabilityMap[i] || []).slice();
       const available = PLAYERS.filter(p => !unavailable.includes(p));
 
@@ -1150,8 +1328,13 @@
 
       // The pinned keeper is guaranteed a place regardless of the usual
       // fairness ranking — the outfield squad is then filled by whoever
-      // has the least game time so far, exactly as before.
-      const outfieldAvailable = available.filter(p => p !== pinnedGK);
+      // has the least game time so far, exactly as before. A player with
+      // no outfield eligibility at all (Bert, when he isn't needed in
+      // goal) is left out of that pool entirely rather than being picked
+      // and then found to have nowhere to actually play.
+      const outfieldAvailable = available.filter(p =>
+        p !== pinnedGK && (!pinnedGK || outfieldPositionsFor(p).length > 0)
+      );
       const rankedOutfield = fairnessSort(outfieldAvailable);
       const outfieldCount = pinnedGK ? Math.min(9, rankedOutfield.length) : Math.min(10, rankedOutfield.length);
       const outfieldPool = rankedOutfield.slice(0, outfieldCount);
@@ -1203,7 +1386,9 @@
   let currentMatch = 1;
   let liveState = null; // {matchNum, status:'running'|'paused'|'ended', kickoffAt, pausedAt, totalPausedMs, snapshot, onFieldSet, subsLog, goals, opponentGoals}
   let matchReports = {}; // { matchNumber: reportObject } — persists after a live session ends
+  let shownReportMatchNum = null; // which match's report is currently open in #reportCard, if any
   let lastBackup = null; // {unavailability, live, reports, savedAt} — manual snapshot for testing/undo
+  let teamLogo = null; // data URL string, or null for the placeholder shield
   let useFirestore = false;
   let db = null;
 
@@ -1250,6 +1435,9 @@
       const rawBackup = localStorage.getItem('jakd63-backup');
       lastBackup = rawBackup ? JSON.parse(rawBackup) : null;
     }catch(e){ lastBackup = null; }
+    try{
+      teamLogo = localStorage.getItem('jakd63-logo') || null;
+    }catch(e){ teamLogo = null; }
   }
   function saveLocal(){
     localStorage.setItem('jakd63-unavailability', JSON.stringify(unavailability));
@@ -1259,6 +1447,18 @@
       db.collection(FIRESTORE_COLLECTION).doc(FIRESTORE_DOC).set({reports: matchReports}, {merge:true}).catch(e => console.error(e));
     } else {
       try{ localStorage.setItem('jakd63-reports', JSON.stringify(matchReports)); }catch(e){}
+    }
+  }
+  function persistLogo(dataUrl){
+    teamLogo = dataUrl;
+    renderLogo();
+    if(useFirestore && db){
+      db.collection(FIRESTORE_COLLECTION).doc(FIRESTORE_DOC).set({teamLogo: dataUrl}, {merge:true}).catch(e => console.error(e));
+    } else {
+      try{
+        if(dataUrl) localStorage.setItem('jakd63-logo', dataUrl);
+        else localStorage.removeItem('jakd63-logo');
+      }catch(e){}
     }
   }
 
@@ -1283,6 +1483,7 @@
       try{ localStorage.setItem('jakd63-backup', JSON.stringify(backup)); }catch(e){}
     }
     updateBackupUI();
+    renderLogo();
   }
 
   function restoreBackup(){
@@ -1332,6 +1533,7 @@
       loadLocal();
       renderForRole();
       updateBackupUI();
+      renderLogo();
       return;
     }
     try{
@@ -1355,9 +1557,11 @@
           liveState = data.live || null;
           matchReports = data.reports || {};
           lastBackup = data.backup || null;
+          teamLogo = data.teamLogo || null;
           renderForRole();
           updateLiveBarDisplay();
           updateBackupUI();
+          renderLogo();
         } else if(!snap.metadata.fromCache){
           // Only create a fresh document once the SERVER has actually
           // confirmed it's missing. A snapshot served straight from an
@@ -1370,10 +1574,12 @@
           liveState = null;
           matchReports = {};
           lastBackup = null;
-          ref.set({unavailability:{}, live:null, reports:{}, backup:null}, {merge:true});
+          teamLogo = null;
+          ref.set({unavailability:{}, live:null, reports:{}, backup:null, teamLogo:null}, {merge:true});
           renderForRole();
           updateLiveBarDisplay();
           updateBackupUI();
+          renderLogo();
         }
         // else: cache says it's missing but the server hasn't weighed in
         // yet — do nothing and wait for the next, authoritative snapshot.
@@ -1384,6 +1590,7 @@
         loadLocal();
         renderForRole();
         updateBackupUI();
+        renderLogo();
       });
       window.addEventListener('online', () => { if(useFirestore) setSyncPill('live'); });
       window.addEventListener('offline', () => { if(useFirestore) setSyncPill('offline-queued'); });
@@ -1394,6 +1601,7 @@
       loadLocal();
       renderForRole();
       updateBackupUI();
+      renderLogo();
     }
   }
 
@@ -1484,11 +1692,15 @@
     const snapshot = computeLiveSnapshot(matchNum);
     if(!snapshot) return;
     const currentPositions = {};
-    snapshot.startingSeven.forEach(p => { if(p.pos) currentPositions[p.pos] = p.name; });
+    const rowLocks = {};
+    snapshot.startingSeven.forEach(p => {
+      if(p.pos) currentPositions[p.pos] = p.name;
+      if(p.pos && DUAL_ROW_PLAYERS.includes(p.name)) rowLocks[p.name] = p.pos;
+    });
     writeLive({
       matchNum, status:'running', kickoffAt: Date.now(), pausedAt:null, totalPausedMs:0, snapshot,
       onFieldSet: snapshot.startingSeven.map(p => p.name),
-      currentPositions,
+      currentPositions, rowLocks,
       remainingPlan: snapshot.events.map(e => ({...e})),
       subsLog: [], goals: [], opponentGoals: []
     });
@@ -1666,10 +1878,11 @@
     const sim = simulateRotation(snap.outfieldRoster, snap.totalMinutes, snap.onFieldCount, {
       startT: now, initialOnField: onField, initialMinutes: minutes, initialContinuousStart: continuousStart
     });
-    const eligFn = snap.pinnedGK ? outfieldPositionsFor : eligiblePositionsFor;
+    const baseEligFn = snap.pinnedGK ? outfieldPositionsFor : eligiblePositionsFor;
+    const eligFn = makeRowLockedEligFn(baseEligFn, liveState.rowLocks);
     const positioned = attachPositionsToEvents(sim.events, liveState.currentPositions, eligFn)
       .map((e,i) => ({...e, id: 'r'+Date.now()+'-'+i}));
-    liveState = {...liveState, remainingPlan: positioned};
+    liveState = {...liveState, remainingPlan: positioned, rowLocks: eligFn.lockedMap};
     persistRemainingPlan();
   }
 
@@ -1689,7 +1902,8 @@
   function applyLiveSubstitution(off, on, meta){
     if(!liveState || !off || !on || off === on) return;
     meta = meta || {};
-    const eligFn = liveState.snapshot.pinnedGK ? outfieldPositionsFor : eligiblePositionsFor;
+    const baseEligFn = liveState.snapshot.pinnedGK ? outfieldPositionsFor : eligiblePositionsFor;
+    const eligFn = makeRowLockedEligFn(baseEligFn, liveState.rowLocks);
     const atMinuteActual = Math.round((getElapsedMs(liveState) / 60000) * 10) / 10;
     const {matchPos: newPositions, ok} = reassignAfterSub(liveState.currentPositions, off, on, eligFn);
     const onPos = Object.keys(newPositions).find(pos => newPositions[pos] === on) || null;
@@ -1709,6 +1923,7 @@
       ...liveState,
       onFieldSet: (liveState.onFieldSet||[]).filter(p => p !== off).concat([on]),
       currentPositions: newPositions,
+      rowLocks: eligFn.lockedMap,
       subsLog: [...(liveState.subsLog||[]), entry],
       remainingPlan: meta.sourceId ? (liveState.remainingPlan||[]).filter(e => e.id !== meta.sourceId) : (liveState.remainingPlan||[])
     };
@@ -1719,6 +1934,7 @@
       ref.update({'live.onFieldSet': firebase.firestore.FieldValue.arrayRemove(off)}).catch(e => console.error(e));
       ref.update({'live.onFieldSet': firebase.firestore.FieldValue.arrayUnion(on)}).catch(e => console.error(e));
       ref.update({'live.currentPositions': newPositions}).catch(e => console.error(e));
+      ref.update({'live.rowLocks': eligFn.lockedMap}).catch(e => console.error(e));
       if(meta.sourceId) ref.update({'live.remainingPlan': liveState.remainingPlan}).catch(e => console.error(e));
     } else {
       try{ localStorage.setItem('jakd63-live', JSON.stringify(liveState)); }catch(e){}
@@ -1836,12 +2052,47 @@
       startingSeven: liveState.snapshot.startingSeven,
       goals: [...(liveState.goals||[])],
       opponentGoals: [...(liveState.opponentGoals||[])],
-      subs: [...(liveState.subsLog||[])]
+      subs: [...(liveState.subsLog||[])],
+      playerOfMatch: liveState.playerOfMatch || null,
+      achievementAward: liveState.achievementAward || null
     };
     matchReports = {...matchReports, [report.matchNum]: report};
     persistReports();
     renderLiveConsole();
     showReport(report.matchNum);
+  }
+
+  // Set live, from the Live Match panel once the match has ended.
+  function recordPlayerOfMatch(){
+    if(!liveState) return;
+    showPlayerPicker('Player of the Match', 'Select from the whole squad.', PLAYERS, null, (name) => {
+      liveState = {...liveState, playerOfMatch: name};
+      renderAll();
+      if(useFirestore && db){ liveDocRef().update({'live.playerOfMatch': name}).catch(e => { console.error(e); writeLive(liveState); }); }
+      else { try{ localStorage.setItem('jakd63-live', JSON.stringify(liveState)); }catch(e){} }
+    });
+  }
+  function recordAchievementAward(){
+    if(!liveState) return;
+    showPlayerPicker('Achievement Award', 'Select from the whole squad.', PLAYERS, null, (name) => {
+      liveState = {...liveState, achievementAward: name};
+      renderAll();
+      if(useFirestore && db){ liveDocRef().update({'live.achievementAward': name}).catch(e => { console.error(e); writeLive(liveState); }); }
+      else { try{ localStorage.setItem('jakd63-live', JSON.stringify(liveState)); }catch(e){} }
+    });
+  }
+  // Add or correct an award on any ALREADY-SAVED report — this is how the
+  // two matches played before this feature existed get their real awards
+  // recorded (there's no way for the app to know those on its own).
+  function editSavedReportAward(matchNum, field){
+    const label = field === 'playerOfMatch' ? 'Player of the Match' : 'Achievement Award';
+    showPlayerPicker(label, 'Select from the whole squad.', PLAYERS, null, (name) => {
+      const report = {...matchReports[matchNum], [field]: name};
+      matchReports = {...matchReports, [matchNum]: report};
+      persistReports();
+      showReport(matchNum);
+      renderAll();
+    });
   }
 
   function buildReportTimeline(report){
@@ -1866,6 +2117,13 @@
       <div class="section-title">📋 Match Report <span class="count">Match ${report.matchNum}</span></div>
       <div class="report-score">${report.goals.length} <span class="opp">– ${report.opponentGoals.length} ${report.opponent}</span></div>
       <div class="report-meta-line">${report.date} · ${report.totalMinutes} minutes played</div>
+      <div class="section-title">Awards</div>
+      <div class="player-row"><div class="name">🏅 Player of the Match</div><span class="tag">${report.playerOfMatch || 'Not set'}</span></div>
+      <div class="player-row"><div class="name">⭐ Achievement Award</div><span class="tag">${report.achievementAward || 'Not set'}</span></div>
+      <div class="console-actions">
+        <button class="console-btn ghost-btn" id="editPotmBtn">Edit Player of the Match</button>
+        <button class="console-btn ghost-btn" id="editAchieveBtn">Edit Achievement Award</button>
+      </div>
       <div class="section-title">Starting 7</div>
       ${startersHtml}
       <div class="section-title">Timeline</div>
@@ -1880,8 +2138,13 @@
     if(!report){ card.classList.add('hidden'); return; }
     card.innerHTML = renderReportHTML(report);
     card.classList.remove('hidden');
+    shownReportMatchNum = matchNum;
     const closeBtn = document.getElementById('closeReportBtn');
-    if(closeBtn) closeBtn.onclick = () => card.classList.add('hidden');
+    if(closeBtn) closeBtn.onclick = () => { card.classList.add('hidden'); shownReportMatchNum = null; };
+    const editPotmBtn = document.getElementById('editPotmBtn');
+    if(editPotmBtn) editPotmBtn.onclick = () => editSavedReportAward(matchNum, 'playerOfMatch');
+    const editAchieveBtn = document.getElementById('editAchieveBtn');
+    if(editAchieveBtn) editAchieveBtn.onclick = () => editSavedReportAward(matchNum, 'achievementAward');
     card.scrollIntoView({behavior:'smooth', block:'start'});
   }
 
@@ -1909,15 +2172,25 @@
         <button class="console-btn goal" id="goalBtn">⚽ Goal</button>
         <button class="console-btn opp-goal" id="oppGoalBtn">🥅 Opponent goal</button>
         <button class="console-btn ghost-btn" id="undoBtn">↩ Undo last entry</button>
-        ${ended ? (hasReport ? `<button class="console-btn report" id="viewReportBtn">📋 View match report</button>` : `<button class="console-btn report" id="genReportBtn">📋 Generate match report</button>`) : ''}
       </div>
-      ${ended ? `<div class="note-box">Match ended — you can still add a missed goal or undo an entry below before generating the report.</div>` : ''}
+      ${ended ? `
+        <div class="console-actions">
+          <button class="console-btn award" id="potmBtn">🏅 Player of the Match${liveState.playerOfMatch ? ': '+liveState.playerOfMatch : ''}</button>
+          <button class="console-btn award" id="achieveBtn">⭐ Achievement Award${liveState.achievementAward ? ': '+liveState.achievementAward : ''}</button>
+        </div>
+        <div class="console-actions">
+          ${hasReport ? `<button class="console-btn report" id="viewReportBtn">📋 View match report</button>` : `<button class="console-btn report" id="genReportBtn">📋 Generate match report</button>`}
+        </div>
+        <div class="note-box">Match ended — you can still add a missed goal, set the awards, or undo an entry before generating the report.</div>
+      ` : ''}
       ${combinedLog.length ? `<ul class="event-log">${combinedLog.map(e => `<li>${e.html}</li>`).join('')}</ul>` : `<div class="note-box">No goals or substitutions logged yet.</div>`}
     `;
     const wire = (id, fn) => { const el = document.getElementById(id); if(el) el.onclick = fn; };
     wire('goalBtn', recordGoal);
     wire('oppGoalBtn', recordOpponentGoal);
     wire('undoBtn', undoLastEvent);
+    wire('potmBtn', recordPlayerOfMatch);
+    wire('achieveBtn', recordAchievementAward);
     wire('genReportBtn', generateMatchReport);
     wire('viewReportBtn', () => showReport(liveState.matchNum));
   }
@@ -2010,6 +2283,57 @@
 /* =========================================================================
    6. THEME
    ========================================================================= */
+  // ---- Team logo: shown in both the coach and spectator headers, synced
+  // the same way as everything else. Resized/compressed client-side before
+  // upload so it stays small (Firestore documents cap out at 1MB total).
+  function renderLogo(){
+    [
+      {img:'teamLogoImgCoach', ph:'logoPlaceholderCoach'},
+      {img:'teamLogoImgSpectator', ph:'logoPlaceholderSpectator'}
+    ].forEach(({img, ph}) => {
+      const imgEl = document.getElementById(img);
+      const phEl = document.getElementById(ph);
+      if(!imgEl || !phEl) return;
+      if(teamLogo){
+        imgEl.src = teamLogo;
+        imgEl.classList.remove('hidden');
+        phEl.classList.add('hidden');
+      } else {
+        imgEl.classList.add('hidden');
+        phEl.classList.remove('hidden');
+      }
+    });
+  }
+
+  function initLogoUpload(){
+    const input = document.getElementById('logoFileInput');
+    if(!input) return;
+    input.addEventListener('change', (e) => {
+      const file = e.target.files && e.target.files[0];
+      if(!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const img = new Image();
+        img.onload = () => {
+          const size = 240; // plenty for a small header badge, keeps the file tiny
+          const canvas = document.createElement('canvas');
+          canvas.width = size; canvas.height = size;
+          const ctx = canvas.getContext('2d');
+          // cover-fit crop to a square so odd-shaped logos still fill the badge
+          const scale = Math.max(size / img.width, size / img.height);
+          const dw = img.width * scale, dh = img.height * scale;
+          ctx.drawImage(img, (size - dw) / 2, (size - dh) / 2, dw, dh);
+          const dataUrl = canvas.toDataURL('image/png', 0.85);
+          persistLogo(dataUrl);
+        };
+        img.onerror = () => { console.error('Could not read that image file.'); };
+        img.src = reader.result;
+      };
+      reader.readAsDataURL(file);
+      input.value = ''; // allow re-selecting the same file later
+    });
+  }
+
   function initTheme(){
     let theme = 'light';
     try{
@@ -2235,21 +2559,11 @@
         const gk = liveState.snapshot.pinnedGK;
         const onField = (liveState.onFieldSet||[]).filter(p => p !== gk);
         const bench = (liveState.snapshot.outfieldRoster||[]).filter(p => !(liveState.onFieldSet||[]).includes(p));
-        html += `<div class="note-box">Use this for a forced or early change the coach makes on the spot — it's logged with the time it actually happened, and the rest of the AI plan rebuilds itself around it straight after.</div>`;
+        html += `<div class="note-box">Use this for a forced or early change the coach makes on the spot — it's logged with the time it actually happened, and the rest of the AI plan rebuilds itself around it straight after. This automatically takes into account anyone who was pulled into the squad because another player marked themselves unavailable.</div>`;
         if(!onField.length || !bench.length){
           html += `<div class="note-box">Not enough players to make a substitution right now.</div>`;
         } else {
-          html += `
-            <div class="manual-sub-row">
-              <label>Bring off (on pitch)</label>
-              <select id="manualOffSelect">${onField.map(p => `<option value="${p}">${p}</option>`).join('')}</select>
-            </div>
-            <div class="manual-sub-row">
-              <label>Bring on (bench)</label>
-              <select id="manualOnSelect">${bench.map(p => `<option value="${p}">${p}</option>`).join('')}</select>
-            </div>
-            <button class="kickoff-btn" id="manualSubConfirmBtn" style="width:100%;">Confirm substitution</button>
-          `;
+          html += `<button class="kickoff-btn" id="manualSubStartBtn" style="width:100%;">✋ Make a manual substitution</button>`;
         }
       }
     }
@@ -2265,16 +2579,21 @@
         () => makeSubEarly(btn.getAttribute('data-ev-id'))
       );
     });
-    const manualBtn = document.getElementById('manualSubConfirmBtn');
-    if(manualBtn) manualBtn.onclick = () => {
-      const off = document.getElementById('manualOffSelect').value;
-      const on = document.getElementById('manualOnSelect').value;
-      showConfirm(
-        `Sub ${off} off, ${on} on?`,
-        'This logs the change right now and rebuilds the rest of the plan to keep everyone as close to equal time as possible.',
-        'Confirm substitution',
-        () => confirmManualSub(off, on)
-      );
+    const manualStartBtn = document.getElementById('manualSubStartBtn');
+    if(manualStartBtn) manualStartBtn.onclick = () => {
+      const gk = liveState.snapshot.pinnedGK;
+      const onFieldNow = (liveState.onFieldSet||[]).filter(p => p !== gk);
+      showPlayerPicker('Bring off', 'Select the player currently on the pitch to bring off.', onFieldNow, null, (off) => {
+        const benchNow = (liveState.snapshot.outfieldRoster||[]).filter(p => !(liveState.onFieldSet||[]).includes(p));
+        showPlayerPicker('Bring on', `Select the player from the bench to replace ${off}.`, benchNow, null, (on) => {
+          showConfirm(
+            `Sub ${off} off, ${on} on?`,
+            'This logs the change right now and rebuilds the rest of the plan to keep everyone as close to equal time as possible.',
+            'Confirm substitution',
+            () => confirmManualSub(off, on)
+          );
+        });
+      });
     };
   }
 
@@ -2310,7 +2629,71 @@
     el.innerHTML = html;
   }
 
+  let mainViewMode = 'matches'; // 'matches' | 'stats'
+
+  function initMainTabs(){
+    const matchesBtn = document.getElementById('mainTabMatches');
+    const statsBtn = document.getElementById('mainTabStats');
+    if(matchesBtn) matchesBtn.onclick = () => { mainViewMode = 'matches'; renderAll(); };
+    if(statsBtn) statsBtn.onclick = () => { mainViewMode = 'stats'; renderAll(); };
+  }
+
+  // Aggregates goals/assists/awards across every saved match report. Every
+  // squad player gets a row, even ones who haven't played yet this season.
+  function computeStats(){
+    const stats = {};
+    PLAYERS.forEach(p => { stats[p] = {goals:0, assists:0, potm:0, achievement:0}; });
+    Object.values(matchReports).forEach(report => {
+      (report.goals||[]).forEach(g => {
+        if(stats[g.scorer]) stats[g.scorer].goals += 1;
+        if(g.assist && stats[g.assist]) stats[g.assist].assists += 1;
+      });
+      if(report.playerOfMatch && stats[report.playerOfMatch]) stats[report.playerOfMatch].potm += 1;
+      if(report.achievementAward && stats[report.achievementAward]) stats[report.achievementAward].achievement += 1;
+    });
+    return stats;
+  }
+
+  function renderStatsTab(){
+    const el = document.getElementById('statsContent');
+    if(!el) return;
+    const stats = computeStats();
+    const maxGoals = Math.max(0, ...PLAYERS.map(p => stats[p].goals));
+    const rows = [...PLAYERS].sort((a,b) => stats[b].goals - stats[a].goals || a.localeCompare(b));
+    const matchCount = Object.keys(matchReports).length;
+    el.innerHTML = `
+      <div class="section-title">Season Stats <span class="count">${matchCount} match${matchCount===1?'':'es'} recorded</span></div>
+      <div class="note-box">Updates automatically every time a match report is generated — goals, assists, Player of the Match and Achievement Award, all pulled straight from the saved reports.</div>
+      <table class="stats-table">
+        <thead><tr><th>Player</th><th>Goals</th><th>Assists</th><th>PotM</th><th>Achievement</th></tr></thead>
+        <tbody>
+          ${rows.map(p => `
+            <tr>
+              <td>${p}${maxGoals > 0 && stats[p].goals === maxGoals ? '<span class="top-scorer-badge">🏆 Top scorer</span>' : ''}</td>
+              <td class="num">${stats[p].goals}</td>
+              <td class="num">${stats[p].assists}</td>
+              <td class="num">${stats[p].potm}</td>
+              <td class="num">${stats[p].achievement}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    `;
+  }
+
   function renderAll(){
+    document.getElementById('mainTabMatches').classList.toggle('active', mainViewMode === 'matches');
+    document.getElementById('mainTabStats').classList.toggle('active', mainViewMode === 'stats');
+    document.getElementById('matchStrip').classList.toggle('hidden', mainViewMode !== 'matches');
+    document.getElementById('matchesView').classList.toggle('hidden', mainViewMode !== 'matches');
+    document.getElementById('statsView').classList.toggle('hidden', mainViewMode !== 'stats');
+    if(mainViewMode === 'stats'){
+      document.getElementById('liveConsoleCard').classList.add('hidden');
+      document.getElementById('reportCard').classList.add('hidden');
+      shownReportMatchNum = null;
+      renderStatsTab();
+      return;
+    }
     const season = computeSeason(unavailability);
     document.getElementById('halfLenNote').textContent = `${HALF_MINUTES} minutes each half (${MATCH_MINUTES} minutes total)`;
     renderMatchStrip(season);
@@ -2321,6 +2704,13 @@
     renderTimelineCard(match, positions);
     renderSeasonCard(season);
     renderLiveConsole();
+    // The report card must never linger onto a different match's tab —
+    // this is exactly what was showing Match 2's report while browsing Match 3.
+    if(shownReportMatchNum !== null && shownReportMatchNum !== currentMatch){
+      const reportCard = document.getElementById('reportCard');
+      if(reportCard) reportCard.classList.add('hidden');
+      shownReportMatchNum = null;
+    }
   }
 
   // ---- Spectator view: read-only, live match only. No tactics, no plans,
@@ -2378,6 +2768,8 @@
 
   initAuthGate();
   initTheme();
+  initMainTabs();
+  initLogoUpload();
   initLiveTimer();
   initFirebase();
 </script>
