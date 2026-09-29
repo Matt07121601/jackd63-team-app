@@ -783,7 +783,7 @@
   // that row (back or mid) for the rest of that match; see rowLockedEligFn.
   const PLAYER_POSITIONS = {
     Callum:  ["GK"],                    // primary goalkeeper
-    Bert:    ["GK"],                    // reserve goalkeeper only, if Callum is unavailable
+    Bert:    ["GK","LD","RD"],          // reserve keeper (Callum unavailable only) + plays left back / right back like everyone else
     Tommy:   ["CD"],                    // centre back
     Theo:    ["LD"],                    // left back
     Ted:     ["RD","RM"],               // right back, or right mid
@@ -1327,8 +1327,14 @@
       }
       const unavailable = (unavailabilityMap[i] || []).slice();
       const available = PLAYERS.filter(p => !unavailable.includes(p));
+      // Players the coach has explicitly asked to sit this match out even
+      // though they ARE available (e.g. rested after playing several
+      // matches in a row) — kept separate from "unavailable" so the squad
+      // screen can say why, but excluded the same way from selection.
+      const restedByCoach = (forcedRest[i] || []).filter(p => available.includes(p));
+      const availableForSelection = available.filter(p => !restedByCoach.includes(p));
 
-      const gkPick = pickGoalkeeper(available, state);
+      const gkPick = pickGoalkeeper(availableForSelection, state);
       const pinnedGK = gkPick.gk;
 
       let gkNote = null;
@@ -1348,7 +1354,7 @@
       // no outfield eligibility at all (Bert, when he isn't needed in
       // goal) is left out of that pool entirely rather than being picked
       // and then found to have nowhere to actually play.
-      const outfieldAvailable = available.filter(p =>
+      const outfieldAvailable = availableForSelection.filter(p =>
         p !== pinnedGK && (!pinnedGK || outfieldPositionsFor(p).length > 0)
       );
       const rankedOutfield = fairnessSort(outfieldAvailable);
@@ -1405,7 +1411,7 @@
 
       results.push({
         fixture: FIXTURES[i-1], roster:orderedRoster, starters:startersPick, subs:subsPick,
-        rested, unavailable, schedule:sched, fixed:false, warning, gkNote,
+        rested, unavailable, restedByCoach, schedule:sched, fixed:false, warning, gkNote,
         capWarnings: sched.capWarnings || []
       });
     }
@@ -1418,6 +1424,7 @@
    ========================================================================= */
   let unavailability = {}; // { matchNumber: [names] }
   let forcedStarters = {}; // { matchNumber: [names] } — coach-forced starting XI overrides
+  let forcedRest = {}; // { matchNumber: [names] } — coach-forced "sit this one out" overrides, for a player who IS available but the coach wants rested this week (e.g. they've played several matches in a row)
   let currentMatch = 1;
   let liveState = null; // {matchNum, status:'running'|'paused'|'ended', kickoffAt, pausedAt, totalPausedMs, snapshot, onFieldSet, subsLog, goals, opponentGoals}
   let matchReports = {}; // { matchNumber: reportObject } — persists after a live session ends
@@ -1477,6 +1484,10 @@
       const rawForced = localStorage.getItem('jakd63-forced-starters');
       forcedStarters = rawForced ? JSON.parse(rawForced) : {};
     }catch(e){ forcedStarters = {}; }
+    try{
+      const rawRest = localStorage.getItem('jakd63-forced-rest');
+      forcedRest = rawRest ? JSON.parse(rawRest) : {};
+    }catch(e){ forcedRest = {}; }
   }
   function saveLocal(){
     localStorage.setItem('jakd63-unavailability', JSON.stringify(unavailability));
@@ -1598,6 +1609,7 @@
           lastBackup = data.backup || null;
           teamLogo = data.teamLogo || null;
           forcedStarters = data.forcedStarters || {};
+          forcedRest = data.forcedRest || {};
           renderForRole();
           updateLiveBarDisplay();
           updateBackupUI();
@@ -1616,7 +1628,8 @@
           lastBackup = null;
           teamLogo = null;
           forcedStarters = {};
-          ref.set({unavailability:{}, live:null, reports:{}, backup:null, teamLogo:null, forcedStarters:{}}, {merge:true});
+          forcedRest = {};
+          ref.set({unavailability:{}, live:null, reports:{}, backup:null, teamLogo:null, forcedStarters:{}, forcedRest:{}}, {merge:true});
           renderForRole();
           updateLiveBarDisplay();
           updateBackupUI();
@@ -1673,10 +1686,58 @@
     if(idx >= 0) list.splice(idx,1); else list.push(name);
     forcedStarters = {...forcedStarters, [key]: list};
 
+    // Forcing someone IN this week cancels any forced-rest on them this
+    // week too — the two are opposites and shouldn't both be set.
+    const restList = forcedRest[key] ? [...forcedRest[key]] : [];
+    const restIdx = restList.indexOf(name);
+    let nextForcedRest = forcedRest;
+    if(idx < 0 && restIdx >= 0){
+      restList.splice(restIdx,1);
+      nextForcedRest = {...forcedRest, [key]: restList};
+      forcedRest = nextForcedRest;
+    }
+
     if(useFirestore && db){
-      db.collection(FIRESTORE_COLLECTION).doc(FIRESTORE_DOC).set({forcedStarters}, {merge:true});
+      db.collection(FIRESTORE_COLLECTION).doc(FIRESTORE_DOC).set({forcedStarters, forcedRest: nextForcedRest}, {merge:true});
     } else {
-      try{ localStorage.setItem('jakd63-forced-starters', JSON.stringify(forcedStarters)); }catch(e){}
+      try{
+        localStorage.setItem('jakd63-forced-starters', JSON.stringify(forcedStarters));
+        localStorage.setItem('jakd63-forced-rest', JSON.stringify(forcedRest));
+      }catch(e){}
+      renderAll();
+    }
+  }
+
+  // Lets a coach insist a specific player SITS OUT a specific (not-yet-played)
+  // match even though they're available — e.g. they've played several
+  // matches in a row and the coach wants to guarantee someone else (like
+  // Bert) gets the game instead. The fairness engine still ranks and
+  // rotates everyone else exactly as before; this just removes one named
+  // player from that week's selection pool.
+  function toggleForcedRest(matchNum, name){
+    const key = String(matchNum);
+    const list = forcedRest[key] ? [...forcedRest[key]] : [];
+    const idx = list.indexOf(name);
+    if(idx >= 0) list.splice(idx,1); else list.push(name);
+    forcedRest = {...forcedRest, [key]: list};
+
+    // Resting someone this week cancels any forced-start on them this week.
+    const startList = forcedStarters[key] ? [...forcedStarters[key]] : [];
+    const startIdx = startList.indexOf(name);
+    let nextForcedStarters = forcedStarters;
+    if(idx < 0 && startIdx >= 0){
+      startList.splice(startIdx,1);
+      nextForcedStarters = {...forcedStarters, [key]: startList};
+      forcedStarters = nextForcedStarters;
+    }
+
+    if(useFirestore && db){
+      db.collection(FIRESTORE_COLLECTION).doc(FIRESTORE_DOC).set({forcedRest, forcedStarters: nextForcedStarters}, {merge:true});
+    } else {
+      try{
+        localStorage.setItem('jakd63-forced-rest', JSON.stringify(forcedRest));
+        localStorage.setItem('jakd63-forced-starters', JSON.stringify(forcedStarters));
+      }catch(e){}
       renderAll();
     }
   }
@@ -2059,7 +2120,14 @@
   function recordGoal(){
     if(!liveState || !(liveState.onFieldSet||[]).length) return;
     const atMinute = Math.round((getElapsedMs(liveState) / 60000) * 10) / 10;
-    showPlayerPicker('Who scored?', 'Select the player currently on the pitch who scored.', liveState.onFieldSet, null, (scorer) => {
+    showPlayerPicker('Who scored?', 'Select the player currently on the pitch who scored, or record an opponent own goal.', liveState.onFieldSet, '⚠️ Own goal (opponent)', (scorer) => {
+      if(scorer === null){
+        // Opponent put it in their own net — counts as our goal, but there's
+        // no scorer or assist to attribute it to.
+        const goal = {atMinute, scorer:'Own Goal (opponent)', assist:null, ownGoal:true, addedAt: Date.now()};
+        addToLiveArray('goals', goal);
+        return;
+      }
       const others = liveState.onFieldSet.filter(p => p !== scorer);
       showPlayerPicker('Assist?', `${scorer} scored at ${fmtReportTime(atMinute)}. Did anyone assist?`, others, 'No assist', (assist) => {
         const goal = {atMinute, scorer, assist: assist || null, addedAt: Date.now()};
@@ -2157,7 +2225,9 @@
 
   function buildReportTimeline(report){
     const items = [
-      ...report.goals.map((g,i) => ({t:g.atMinute, order:0, goalIdx:i, html:`<span class="icon">⚽</span><span class="time">${fmtReportTime(g.atMinute)}</span><span>Goal: <b>${g.scorer}</b>${g.assist ? `, Assist: <b>${g.assist}</b>` : ''} <button class="remove-goal-link" data-goal-idx="${i}">✕ remove</button></span>`})),
+      ...report.goals.map((g,i) => ({t:g.atMinute, order:0, goalIdx:i, html: g.ownGoal
+        ? `<span class="icon">⚠️</span><span class="time">${fmtReportTime(g.atMinute)}</span><span>Goal: <b>Own goal (opponent)</b> <button class="remove-goal-link" data-goal-idx="${i}">✕ remove</button></span>`
+        : `<span class="icon">⚽</span><span class="time">${fmtReportTime(g.atMinute)}</span><span>Goal: <b>${g.scorer}</b>${g.assist ? `, Assist: <b>${g.assist}</b>` : ''} <button class="remove-goal-link" data-goal-idx="${i}">✕ remove</button></span>`})),
       ...report.opponentGoals.map(g => ({t:g.atMinute, order:0, html:`<span class="icon">🥅</span><span class="time">${fmtReportTime(g.atMinute)}</span><span>Goal: <b>${report.opponent}</b></span>`})),
       ...report.subs.map(s => ({t:s.atMinuteActual, order:1, html:`<span class="icon">🔁</span><span class="time">${fmtReportTime(s.atMinuteActual)}</span><span><b>Substitution</b> — ${s.off} OFF → ${s.on} ON (${s.onPos ? POSITION_LABEL[s.onPos] : '—'})${s.manual ? ` <span class="tag">manual</span>` : ''}${s.early ? ` <span class="tag">made early</span>` : ''}${s.reshuffled && s.reshuffled.length ? `<br><span class="tag">also: ${s.reshuffled.map(r=>r.player+' → '+POSITION_LABEL[r.newPos]).join(', ')}</span>` : ''}</span>`}))
     ];
@@ -2202,15 +2272,21 @@
   function addGoalToReport(matchNum){
     const report = matchReports[matchNum];
     if(!report) return;
-    showPlayerPicker('Add a goal — who scored?', 'Select from the whole squad. This corrects the saved record after the match.', PLAYERS, null, (scorer) => {
-      const others = PLAYERS.filter(p => p !== scorer);
-      showPlayerPicker('Assist?', `${scorer} scored. Did anyone assist?`, others, 'No assist', (assist) => {
-        const goal = {atMinute: report.totalMinutes, scorer, assist: assist || null, addedAt: Date.now()};
+    showPlayerPicker('Add a goal — who scored?', 'Select from the whole squad, or record an opponent own goal. This corrects the saved record after the match.', PLAYERS, '⚠️ Own goal (opponent)', (scorer) => {
+      const finish = (goal) => {
         const updated = {...matchReports[matchNum], goals: [...matchReports[matchNum].goals, goal]};
         matchReports = {...matchReports, [matchNum]: updated};
         persistReports();
         showReport(matchNum);
         renderAll();
+      };
+      if(scorer === null){
+        finish({atMinute: report.totalMinutes, scorer:'Own Goal (opponent)', assist:null, ownGoal:true, addedAt: Date.now()});
+        return;
+      }
+      const others = PLAYERS.filter(p => p !== scorer);
+      showPlayerPicker('Assist?', `${scorer} scored. Did anyone assist?`, others, 'No assist', (assist) => {
+        finish({atMinute: report.totalMinutes, scorer, assist: assist || null, addedAt: Date.now()});
       });
     });
   }
@@ -2261,7 +2337,9 @@
     card.classList.remove('hidden');
     const goals = liveState.goals || [], oppGoals = liveState.opponentGoals || [], subs = liveState.subsLog || [];
     const combinedLog = [
-      ...goals.map(g => ({t:g.atMinute, html:`<span class="icon">⚽</span><span class="time">${fmtReportTime(g.atMinute)}</span><span>Goal: <b>${g.scorer}</b>${g.assist?`, Assist: <b>${g.assist}</b>`:''}</span>`})),
+      ...goals.map(g => ({t:g.atMinute, html: g.ownGoal
+        ? `<span class="icon">⚠️</span><span class="time">${fmtReportTime(g.atMinute)}</span><span>Goal: <b>Own goal (opponent)</b></span>`
+        : `<span class="icon">⚽</span><span class="time">${fmtReportTime(g.atMinute)}</span><span>Goal: <b>${g.scorer}</b>${g.assist?`, Assist: <b>${g.assist}</b>`:''}</span>`})),
       ...oppGoals.map(g => ({t:g.atMinute, html:`<span class="icon">🥅</span><span class="time">${fmtReportTime(g.atMinute)}</span><span>${liveState.snapshot.opponent} goal</span>`})),
       ...subs.map(s => ({t:s.atMinuteActual, html:`<span class="icon">🔁</span><span class="time">${fmtReportTime(s.atMinuteActual)}</span><span>${s.off} OFF → ${s.on} ON (${s.onPos?POSITION_LABEL[s.onPos]:'—'})${s.manual?' <span class="tag">manual</span>':''}${s.early?' <span class="tag">made early</span>':''}</span>`}))
     ].sort((a,b) => a.t - b.t);
@@ -2548,11 +2626,17 @@
           onclick="window.__toggleForceStart(${match.fixture.n}, '${name}')">
           ${opts.isForced ? '⭐ Forced to start' : '⭐ Force start'}
         </button>` : '';
+    const forceRestBtn = opts.showForceRest ? `
+        <button class="force-start-btn ${opts.isForcedRest ? 'on' : ''}" ${opts.canForceStart ? '' : 'disabled'}
+          onclick="window.__toggleForceRest(${match.fixture.n}, '${name}')">
+          ${opts.isForcedRest ? '💤 Forced to rest' : '💤 Force rest'}
+        </button>` : '';
     return `
       <div class="player-row ${isUnavailable ? 'unavailable' : ''}">
         <div class="name">${name} ${opts.tag ? `<span class="tag">${opts.tag}</span>` : ''}</div>
-        <div style="display:flex; gap:6px; align-items:center;">
+        <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
           ${forceStartBtn}
+          ${forceRestBtn}
           <button class="avail-btn ${isUnavailable ? 'out' : ''}" ${canToggle ? '' : 'disabled'}
             onclick="window.__toggleAvail(${match.fixture.n}, '${name}')">
             ${isUnavailable ? 'Unavailable' : 'Mark unavailable'}
@@ -2567,28 +2651,32 @@
     if(positions.warnings.length){
       positions.warnings.forEach(w => html += `<div class="warning-box">⚠ ${w}</div>`);
     }
+    const canForceStart = !match.fixed && !(liveState && liveState.matchNum === match.fixture.n);
+    const forcedList = forcedStarters[String(match.fixture.n)] || [];
+    const forcedRestList = forcedRest[String(match.fixture.n)] || [];
+
     html += `<div class="section-title">Starting 7 <span class="count">on pitch at KO</span></div>`;
     match.schedule.onFieldAtStart.forEach(n => {
       const pos = positions.kickoffAssignment && Object.entries(positions.kickoffAssignment).find(([,pl]) => pl === n);
       const tag = pos ? POSITION_LABEL[pos[0]] : 'position unassigned';
-      html += playerRow(n, match, {tag});
+      html += playerRow(n, match, {tag, showForceRest:true, canForceStart, isForcedRest: forcedRestList.includes(n)});
     });
 
-    const canForceStart = !match.fixed && !(liveState && liveState.matchNum === match.fixture.n);
-    const forcedList = forcedStarters[String(match.fixture.n)] || [];
     html += `<div class="section-title">Bench <span class="count">${match.schedule.benchAtStart.length} substitute${match.schedule.benchAtStart.length===1?'':'s'}</span></div>`;
     match.schedule.benchAtStart.forEach(n => html += playerRow(n, match, {
       tag:'sub · plays ' + eligiblePositionsFor(n).map(p=>p).join('/'),
-      showForceStart:true, canForceStart, isForced: forcedList.includes(n)
+      showForceStart:true, showForceRest:true, canForceStart, isForced: forcedList.includes(n), isForcedRest: forcedRestList.includes(n)
     }));
 
     const restedList = match.fixed ? match.rested : [...match.rested];
+    const restedByCoachList = match.restedByCoach || [];
     html += `<div class="section-title">Not in this matchday squad <span class="count">${restedList.length + (match.unavailable?match.unavailable.length:0)}</span></div>`;
     if(restedList.length === 0 && (!match.unavailable || match.unavailable.length===0)){
       html += `<div class="note-box">Everyone is in the squad this week.</div>`;
     }
     restedList.forEach(n => html += playerRow(n, match, {
-      tag:'resting — fairness rotation', showForceStart:true, canForceStart, isForced: forcedList.includes(n)
+      tag: restedByCoachList.includes(n) ? 'resting — coach’s choice' : 'resting — fairness rotation',
+      showForceStart:true, canForceStart, isForced: forcedList.includes(n)
     }));
     if(match.unavailable) match.unavailable.forEach(n => html += playerRow(n, match, {tag:'marked unavailable'}));
 
@@ -2861,7 +2949,9 @@
       : `${fmtClock(elapsedMs)} played`;
 
     const timeline = [
-      ...goals.map(g => ({t:g.atMinute, html:`<span class="icon">⚽</span><span class="time">${fmtReportTime(g.atMinute)}</span><span>Goal: <b>${g.scorer}</b>${g.assist?`, Assist: <b>${g.assist}</b>`:''}</span>`})),
+      ...goals.map(g => ({t:g.atMinute, html: g.ownGoal
+        ? `<span class="icon">⚠️</span><span class="time">${fmtReportTime(g.atMinute)}</span><span>Goal: <b>Own goal (opponent)</b></span>`
+        : `<span class="icon">⚽</span><span class="time">${fmtReportTime(g.atMinute)}</span><span>Goal: <b>${g.scorer}</b>${g.assist?`, Assist: <b>${g.assist}</b>`:''}</span>`})),
       ...oppGoals.map(g => ({t:g.atMinute, html:`<span class="icon">🥅</span><span class="time">${fmtReportTime(g.atMinute)}</span><span>Goal: <b>${snap.opponent}</b></span>`})),
       ...subs.map(s => ({t:s.atMinuteActual, html:`<span class="icon">🔁</span><span class="time">${fmtReportTime(s.atMinuteActual)}</span><span>${s.off} OFF → ${s.on} ON</span>`}))
     ].sort((a,b) => a.t - b.t);
@@ -2888,6 +2978,7 @@
 
   window.__toggleAvail = toggleAvailability;
   window.__toggleForceStart = toggleForcedStarter;
+  window.__toggleForceRest = toggleForcedRest;
 
   initAuthGate();
   initTheme();
